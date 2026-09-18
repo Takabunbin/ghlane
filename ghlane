@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -26,9 +26,7 @@ log() { printf '[ghlane] %s\n' "$*" >&2; }
 
 is_accelerable_url() {
   case "$1" in
-    https://github.com/*/releases/download/*|\
-    https://github.com/*/archive/*|\
-    https://codeload.github.com/*) return 0 ;;
+    https://github.com/*/releases/download/*) return 0 ;;
     *) return 1 ;;
   esac
 }
