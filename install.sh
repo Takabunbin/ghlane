@@ -16,9 +16,29 @@ else
   SUDO=(sudo)
 fi
 
-real_curl=$(command -v curl || true)
-real_wget=$(command -v wget || true)
-[[ -n "$real_curl" ]] || { echo 'ghlane: curl is required for installation' >&2; exit 1; }
+old_real_curl=""
+old_real_wget=""
+if [[ -r "$CONF" ]]; then
+  . "$CONF"
+  old_real_curl="${REAL_CURL:-}"
+  old_real_wget="${REAL_WGET:-}"
+fi
+
+if [[ -n "$old_real_curl" && -x "$old_real_curl" && "$old_real_curl" != "$LIBEXEC/ghlane" ]]; then
+  real_curl="$old_real_curl"
+else
+  real_curl=$(PATH=/usr/bin:/bin command -v curl || true)
+  [[ -n "$real_curl" ]] || real_curl=$(command -v curl || true)
+fi
+
+if [[ -n "$old_real_wget" && -x "$old_real_wget" && "$old_real_wget" != "$LIBEXEC/ghlane" ]]; then
+  real_wget="$old_real_wget"
+else
+  real_wget=$(PATH=/usr/bin:/bin command -v wget || true)
+  [[ -n "$real_wget" ]] || real_wget=$(command -v wget || true)
+fi
+
+[[ -n "$real_curl" && -x "$real_curl" ]] || { echo 'ghlane: curl is required for installation' >&2; exit 1; }
 real_curl=$(readlink -f "$real_curl")
 [[ -z "$real_wget" ]] || real_wget=$(readlink -f "$real_wget")
 
@@ -44,12 +64,17 @@ CONF
 "${SUDO[@]}" ln -sfn "$LIBEXEC/ghlane" "$BIN/ghlane"
 
 install_wrapper() {
-  local name="$1" backend="$2" dst="$BIN/$name"
+  local name="$1" backend="$2" dst="$BIN/$name" target=""
   [[ -n "$backend" && -x "$backend" ]] || return 0
-  if [[ -e "$dst" && ! -L "$dst" ]]; then
-    echo "ghlane: leaving existing $dst untouched" >&2
-    return 0
+
+  if [[ -e "$dst" || -L "$dst" ]]; then
+    [[ -L "$dst" ]] && target=$(readlink -f "$dst" 2>/dev/null || true)
+    if [[ "$target" != "$LIBEXEC/ghlane" ]]; then
+      echo "ghlane: leaving existing $dst untouched" >&2
+      return 0
+    fi
   fi
+
   "${SUDO[@]}" ln -sfn "$LIBEXEC/ghlane" "$dst"
 }
 
