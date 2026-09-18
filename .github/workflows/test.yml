@@ -12,6 +12,8 @@ jobs:
       - run: |
           bash -n ghlane
           bash -n install.sh
-          chmod +x ghlane
+          bash -n tests/fault-injection.sh
+          chmod +x ghlane tests/fault-injection.sh
           ./ghlane self-test
           test "$(./ghlane version)" = "ghlane 0.1.8"
+          CORE="$PWD/ghlane" ./tests/fault-injection.sh
