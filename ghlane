@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+VERSION="0.1.0"
+CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
+[[ -r "$CONFIG" ]] && . "$CONFIG"
+
+REAL_CURL="${REAL_CURL:-/usr/bin/curl}"
+REAL_WGET="${REAL_WGET:-/usr/bin/wget}"
+MIRROR_FILE="${MIRROR_FILE:-/etc/ghlane/mirrors.txt}"
+BEST_TTL="${BEST_TTL:-3600}"
+SAMPLE_BYTES="${SAMPLE_BYTES:-1048575}"
+RACE_TIMEOUT="${RACE_TIMEOUT:-2}"
+
+if [[ -n "${GHLANE_CACHE_DIR:-}" ]]; then
+  CACHE_DIR="$GHLANE_CACHE_DIR"
+elif [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+  CACHE_DIR="$XDG_CACHE_HOME/ghlane"
+elif [[ -n "${HOME:-}" ]]; then
+  CACHE_DIR="$HOME/.cache/ghlane"
+else
+  CACHE_DIR="${TMPDIR:-/tmp}/ghlane-${UID:-0}"
+fi
+
+log() { printf '[ghlane] %s\n' "$*" >&2; }
+
+is_accelerable_url() {
+  case "$1" in
+    https://github.com/*/releases/download/*|\
+    https://github.com/*/archive/*|\
+    https://raw.githubusercontent.com/*|\
+    https://codeload.github.com/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+has_sensitive_auth() {
+  local arg lower
+  for arg in "$@"; do
+    lower="${arg,,}"
+    case "$lower" in
+      *authorization:*|--user|--user=*|-u|--oauth2-bearer|--oauth2-bearer=*|\
+      --netrc|--netrc-file|--netrc-file=*|--password|--password=*|\
+      --cookie|--cookie=*|-b|--header=*private-token*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+find_single_url() {
+  local arg found="" count=0
+  for arg in "$@"; do
+    if is_accelerable_url "$arg" && [[ "$arg" != *\?* && "$arg" != *\#* ]]; then
+      found="$arg"
+      ((count += 1))
+    fi
+  done
+  [[ $count -eq 1 ]] || return 1
+  printf '%s\n' "$found"
+}
+
+candidate_url() {
+  local candidate="$1" url="$2"
+  if [[ "$candidate" == DIRECT ]]; then
+    printf '%s\n' "$url"
+  else
+    printf '%s/%s\n' "${candidate%/}" "$url"
+  fi
+}
+
+candidate_label() {
+  local label="$1"
+  [[ "$label" == DIRECT ]] && { printf 'direct'; return; }
+  label="${label#http://}"
+  label="${label#https://}"
+  printf '%s' "${label%/}"
+}
+
+mirror_source() {
+  [[ -r "$MIRROR_FILE" ]] && cat "$MIRROR_FILE"
+}
+
+cached_candidate() {
+  local cache="$CACHE_DIR/best" now ts candidate
+  [[ -r "$cache" ]] || return 1
+  read -r ts candidate < "$cache" || return 1
+  now=$(date +%s)
+  (( now - ts < BEST_TTL )) || return 1
+  printf '%s\n' "$candidate"
+}
+
+save_candidate() {
+  mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
+  printf '%s %s\n' "$(date +%s)" "$1" > "$CACHE_DIR/best.tmp.$$" &&
+    mv "$CACHE_DIR/best.tmp.$$" "$CACHE_DIR/best"
+}
+
+race_candidates() {
+  local url="$1" tmpdir candidate target speed i=0 best
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane.XXXXXX") || return 1
+
+  # ponytail: fixed 1 MiB samples keep V0.1 tiny. If real-world tests show
+  # close links are mis-ranked, replace this with staggered adaptive racing.
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" && "$candidate" != \#* ]] || continue
+    [[ "$candidate" == DIRECT || "$candidate" == https://* ]] || continue
+    target=$(candidate_url "$candidate" "$url")
+    (
+      speed=$("$REAL_CURL" -fsSL \
+        --connect-timeout 2 \
+        --max-time "$RACE_TIMEOUT" \
+        --range "0-${SAMPLE_BYTES}" \
+        -o /dev/null \
+        -w '%{speed_download}' \
+        "$target" 2>/dev/null || true)
+      printf '%s\t%s\n' "${speed:-0}" "$candidate"
+    ) > "$tmpdir/$i" &
+    i=$((i + 1))
+  done < <(printf 'DIRECT\n'; mirror_source)
+  wait
+
+  best=$(cat "$tmpdir"/* 2>/dev/null | awk -F '\t' '$1+0 > best+0 {best=$1; line=$2} END {if (line) print line}')
+  rm -rf "$tmpdir"
+  [[ -n "$best" ]] || return 1
+  printf '%s\n' "$best"
+}
+
+select_candidate() {
+  local url="$1" candidate
+  candidate=$(cached_candidate 2>/dev/null) && { printf '%s\n' "$candidate"; return; }
+  candidate=$(race_candidates "$url") || candidate="DIRECT"
+  save_candidate "$candidate"
+  log "selected $(candidate_label "$candidate")"
+  printf '%s\n' "$candidate"
+}
+
+replace_url_and_run() {
+  local real="$1" url="$2" candidate="$3" target status i
+  shift 3
+  local args=("$@")
+  target=$(candidate_url "$candidate" "$url")
+
+  for i in "${!args[@]}"; do
+    [[ "${args[$i]}" == "$url" ]] && args[$i]="$target"
+  done
+
+  "$real" "${args[@]}"
+  status=$?
+  if (( status != 0 )); then
+    rm -f "$CACHE_DIR/best" 2>/dev/null || true
+    [[ "$candidate" == DIRECT ]] || log 'route failed; cache cleared for next attempt'
+  fi
+  return "$status"
+}
+
+proxy_tool() {
+  local tool="$1" real="$2" url candidate
+  shift 2
+
+  [[ "${GHLANE_BYPASS:-0}" == 1 ]] && exec "$real" "$@"
+  [[ -x "$real" ]] || { log "$tool backend not found: $real"; return 127; }
+  has_sensitive_auth "$@" && exec "$real" "$@"
+  url=$(find_single_url "$@") || exec "$real" "$@"
+  candidate=$(select_candidate "$url")
+  replace_url_and_run "$real" "$url" "$candidate" "$@"
+}
+
+self_test() {
+  local u='https://github.com/o/r/releases/download/v1/app'
+  is_accelerable_url "$u" || return 1
+  ! is_accelerable_url 'https://api.github.com/repos/o/r' || return 1
+  [[ "$(candidate_url 'https://mirror.example' "$u")" == "https://mirror.example/$u" ]] || return 1
+  has_sensitive_auth '-H' 'Authorization: Bearer secret' || return 1
+  log 'self-test passed'
+}
+
+cli() {
+  local candidate
+  case "${1:-}" in
+    --version|-V|version) printf 'ghlane %s\n' "$VERSION" ;;
+    self-test) self_test ;;
+    mirrors) printf 'DIRECT\n'; mirror_source ;;
+    status)
+      printf 'ghlane %s\n' "$VERSION"
+      printf 'curl: %s\n' "$REAL_CURL"
+      printf 'wget: %s\n' "$REAL_WGET"
+      printf 'mirrors: %s\n' "$MIRROR_FILE"
+      if candidate=$(cached_candidate 2>/dev/null); then
+        printf 'cached route: %s\n' "$(candidate_label "$candidate")"
+      else
+        printf 'cached route: none\n'
+      fi
+      ;;
+    *)
+      printf 'Usage: ghlane {status|mirrors|self-test|version}\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+case "$(basename "$0")" in
+  curl) proxy_tool curl "$REAL_CURL" "$@" ;;
+  wget) proxy_tool wget "$REAL_WGET" "$@" ;;
+  *) cli "$@" ;;
+esac
