@@ -1,0 +1,17 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          bash -n ghlane
+          bash -n install.sh
+          chmod +x ghlane
+          ./ghlane self-test
+          test "$(./ghlane version)" = "ghlane 0.1.8"
