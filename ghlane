@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.4"
+VERSION="0.1.5"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -35,7 +35,7 @@ should_bypass_args() {
   local arg lower
   for arg in "$@"; do
     case "$arg" in
-      -H|-H?*|-K|-K?*|-X|-X?*|-d|-d?*|-F|-F?*|-T|-T?*|-I) return 0 ;;
+      -H|-H?*|-K|-K?*|-X|-X?*|-d|-d?*|-F|-F?*|-T|-T?*|-I|-u|-u?*|-b|-b?*) return 0 ;;
     esac
 
     lower="${arg,,}"
@@ -196,6 +196,8 @@ self_test() {
   [[ "$(candidate_url 'https://mirror.example' "$u")" == "https://mirror.example/$u" ]] || return 1
   [[ "$(find_single_url "--url=$u")" == "$u" ]] || return 1
   should_bypass_args '-H' 'Cookie: session=secret' || return 1
+  should_bypass_args '-u' 'user:pass' || return 1
+  should_bypass_args '-b' 'a=b' || return 1
   should_bypass_args '-K' '/tmp/curlrc' || return 1
   should_bypass_args '-X' 'POST' || return 1
   should_bypass_args '--data' 'x=1' || return 1
