@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.6"
+VERSION="0.1.7"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -129,9 +129,17 @@ race_candidates() {
         --range "0-${SAMPLE_BYTES}" \
         --max-filesize "$((SAMPLE_BYTES + 1))" \
         -o /dev/null \
-        -w '%{speed_download}\t%{content_type}\t%{http_code}\t%{size_download}' \
+        -w '%{speed_download}|%{content_type}|%{http_code}|%{size_download}' \
         "$target" 2>/dev/null); then
-        IFS=
+        IFS='|' read -r speed content_type http_code size_download <<< "$stats"
+        case "$http_code" in
+          200|206) ;;
+          *) speed=0 ;;
+        esac
+        [[ "${content_type,,}" == text/html* || "${size_download:-0}" == 0 ]] && speed=0
+      fi
+      printf '%s\t%s\n' "${speed:-0}" "$candidate"
+    ) > "$tmpdir/$i" &
     i=$((i + 1))
   done < <(printf 'DIRECT\n'; mirror_source)
   wait
@@ -141,7 +149,6 @@ race_candidates() {
   [[ -n "$best" ]] || return 1
   printf '%s\n' "$best"
 }
-
 select_candidate() {
   local url="$1" candidate
   candidate=$(cached_candidate 2>/dev/null) && { printf '%s\n' "$candidate"; return; }
