@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.5"
+VERSION="0.1.6"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -112,26 +112,134 @@ save_candidate() {
 }
 
 race_candidates() {
-  local url="$1" tmpdir candidate target stats speed content_type i=0 best
+  local url="$1" tmpdir candidate target stats speed content_type http_code size_download i=0 best
   tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane.XXXXXX") || return 1
 
-  # ponytail: fixed 1 MiB samples keep V0.1 tiny. If real-world tests show
-  # close links are mis-ranked, replace this with staggered adaptive racing.
+  # ponytail: fixed 1 MiB samples keep V0.1 tiny. Only completed probes
+  # are eligible; partial/time-out responses must never win the race.
   while IFS= read -r candidate; do
     [[ -n "$candidate" && "$candidate" != \#* ]] || continue
     [[ "$candidate" == DIRECT || "$candidate" == https://* ]] || continue
     target=$(candidate_url "$candidate" "$url")
     (
-      stats=$("$REAL_CURL" -q -fsSL \
+      speed=0
+      if stats=$("$REAL_CURL" -q -fsSL \
         --connect-timeout 2 \
         --max-time "$RACE_TIMEOUT" \
         --range "0-${SAMPLE_BYTES}" \
         --max-filesize "$((SAMPLE_BYTES + 1))" \
         -o /dev/null \
-        -w '%{speed_download}\t%{content_type}' \
-        "$target" 2>/dev/null || true)
-      IFS=$'\t' read -r speed content_type <<< "$stats"
-      [[ "${content_type,,}" == text/html* ]] && speed=0
+        -w '%{speed_download}\t%{content_type}\t%{http_code}\t%{size_download}' \
+        "$target" 2>/dev/null); then
+        IFS=
+    i=$((i + 1))
+  done < <(printf 'DIRECT\n'; mirror_source)
+  wait
+
+  best=$(cat "$tmpdir"/* 2>/dev/null | awk -F '\t' '$1+0 > best+0 {best=$1; line=$2} END {if (line) print line}')
+  rm -rf "$tmpdir"
+  [[ -n "$best" ]] || return 1
+  printf '%s\n' "$best"
+}
+
+select_candidate() {
+  local url="$1" candidate
+  candidate=$(cached_candidate 2>/dev/null) && { printf '%s\n' "$candidate"; return; }
+  candidate=$(race_candidates "$url") || candidate="DIRECT"
+  save_candidate "$candidate"
+  log "selected $(candidate_label "$candidate")"
+  printf '%s\n' "$candidate"
+}
+
+replace_url_and_run() {
+  local real="$1" url="$2" candidate="$3" target status i
+  shift 3
+  local args=("$@")
+  target=$(candidate_url "$candidate" "$url")
+
+  for i in "${!args[@]}"; do
+    if [[ "${args[$i]}" == "$url" ]]; then
+      args[$i]="$target"
+    elif [[ "${args[$i]}" == "--url=$url" ]]; then
+      args[$i]="--url=$target"
+    fi
+  done
+
+  "$real" "${args[@]}"
+  status=$?
+  if (( status != 0 )); then
+    rm -f "$CACHE_DIR/best" 2>/dev/null || true
+    [[ "$candidate" == DIRECT ]] || log 'route failed; cache cleared for next attempt'
+  fi
+  return "$status"
+}
+
+proxy_tool() {
+  local tool="$1" real="$2" url candidate
+  shift 2
+
+  [[ "${GHLANE_BYPASS:-0}" == 1 ]] && exec "$real" "$@"
+  [[ -x "$real" ]] || { log "$tool backend not found: $real"; return 127; }
+  should_bypass_args "$@" && exec "$real" "$@"
+  url=$(find_single_url "$@") || exec "$real" "$@"
+  candidate=$(select_candidate "$url")
+  replace_url_and_run "$real" "$url" "$candidate" "$@"
+}
+
+self_test() {
+  local u='https://github.com/o/r/releases/download/v1/app'
+  is_accelerable_url "$u" || return 1
+  ! is_accelerable_url 'https://api.github.com/repos/o/r' || return 1
+  ! is_accelerable_url 'https://raw.githubusercontent.com/o/r/main/install.sh' || return 1
+  [[ "$(candidate_url 'https://mirror.example' "$u")" == "https://mirror.example/$u" ]] || return 1
+  [[ "$(find_single_url "--url=$u")" == "$u" ]] || return 1
+  should_bypass_args '-H' 'Cookie: session=secret' || return 1
+  should_bypass_args '-u' 'user:pass' || return 1
+  should_bypass_args '-b' 'a=b' || return 1
+  should_bypass_args '-K' '/tmp/curlrc' || return 1
+  should_bypass_args '-X' 'POST' || return 1
+  should_bypass_args '--data' 'x=1' || return 1
+  should_bypass_args '-T' '/tmp/file' || return 1
+  should_bypass_args '-I' || return 1
+  log 'self-test passed'
+}
+
+cli() {
+  local candidate
+  case "${1:-}" in
+    --version|-V|version) printf 'ghlane %s\n' "$VERSION" ;;
+    self-test) self_test ;;
+    mirrors) printf 'DIRECT\n'; mirror_source ;;
+    status)
+      printf 'ghlane %s\n' "$VERSION"
+      printf 'curl: %s\n' "$REAL_CURL"
+      printf 'wget: %s\n' "$REAL_WGET"
+      printf 'mirrors: %s\n' "$MIRROR_FILE"
+      if candidate=$(cached_candidate 2>/dev/null); then
+        printf 'cached route: %s\n' "$(candidate_label "$candidate")"
+      else
+        printf 'cached route: none\n'
+      fi
+      ;;
+    *)
+      printf 'Usage: ghlane {status|mirrors|self-test|version}\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+case "$(basename "$0")" in
+  curl) proxy_tool curl "$REAL_CURL" "$@" ;;
+  wget) proxy_tool wget "$REAL_WGET" "$@" ;;
+  *) cli "$@" ;;
+esac
+\t' read -r speed content_type http_code size_download <<< "$stats"
+        case "$http_code" in
+          200|206) ;;
+          *) speed=0 ;;
+        esac
+        [[ "${content_type,,}" == text/html* || "${size_download:-0}" == 0 ]] && speed=0
+      fi
       printf '%s\t%s\n' "${speed:-0}" "$candidate"
     ) > "$tmpdir/$i" &
     i=$((i + 1))
