@@ -64,7 +64,10 @@ CONF
 "${SUDO[@]}" ln -sfn "$LIBEXEC/ghlane" "$BIN/ghlane"
 
 install_wrapper() {
-  local name="$1" backend="$2" dst="$BIN/$name" target=""
+  local name="$1"
+  local backend="$2"
+  local dst="$BIN/$name"
+  local target=""
   [[ -n "$backend" && -x "$backend" ]] || return 0
 
   if [[ -e "$dst" || -L "$dst" ]]; then
