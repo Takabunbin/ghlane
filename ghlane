@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -28,7 +28,6 @@ is_accelerable_url() {
   case "$1" in
     https://github.com/*/releases/download/*|\
     https://github.com/*/archive/*|\
-    https://raw.githubusercontent.com/*|\
     https://codeload.github.com/*) return 0 ;;
     *) return 1 ;;
   esac
@@ -173,6 +172,7 @@ self_test() {
   local u='https://github.com/o/r/releases/download/v1/app'
   is_accelerable_url "$u" || return 1
   ! is_accelerable_url 'https://api.github.com/repos/o/r' || return 1
+  ! is_accelerable_url 'https://raw.githubusercontent.com/o/r/main/install.sh' || return 1
   [[ "$(candidate_url 'https://mirror.example' "$u")" == "https://mirror.example/$u" ]] || return 1
   has_sensitive_auth '-H' 'Authorization: Bearer secret' || return 1
   log 'self-test passed'
