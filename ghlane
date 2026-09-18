@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -86,6 +86,7 @@ cached_candidate() {
   read -r ts candidate < "$cache" || return 1
   now=$(date +%s)
   (( now - ts < BEST_TTL )) || return 1
+  [[ "$candidate" == DIRECT ]] || grep -Fxq "$candidate" "$MIRROR_FILE" 2>/dev/null || return 1
   printf '%s\n' "$candidate"
 }
 
@@ -96,7 +97,7 @@ save_candidate() {
 }
 
 race_candidates() {
-  local url="$1" tmpdir candidate target speed i=0 best
+  local url="$1" tmpdir candidate target stats speed content_type i=0 best
   tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane.XXXXXX") || return 1
 
   # ponytail: fixed 1 MiB samples keep V0.1 tiny. If real-world tests show
@@ -106,13 +107,16 @@ race_candidates() {
     [[ "$candidate" == DIRECT || "$candidate" == https://* ]] || continue
     target=$(candidate_url "$candidate" "$url")
     (
-      speed=$("$REAL_CURL" -fsSL \
+      stats=$("$REAL_CURL" -fsSL \
         --connect-timeout 2 \
         --max-time "$RACE_TIMEOUT" \
         --range "0-${SAMPLE_BYTES}" \
+        --max-filesize "$((SAMPLE_BYTES + 1))" \
         -o /dev/null \
-        -w '%{speed_download}' \
+        -w '%{speed_download}\t%{content_type}' \
         "$target" 2>/dev/null || true)
+      IFS=$'\t' read -r speed content_type <<< "$stats"
+      [[ "${content_type,,}" == text/html* ]] && speed=0
       printf '%s\t%s\n' "${speed:-0}" "$candidate"
     ) > "$tmpdir/$i" &
     i=$((i + 1))
