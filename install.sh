@@ -2,7 +2,8 @@
 set -euo pipefail
 
 REPO="Takabunbin/ghlane"
-BASE="https://cdn.jsdelivr.net/gh/${REPO}@main"
+REF="${GHLANE_REF:-main}"
+BASE="https://cdn.jsdelivr.net/gh/${REPO}@${REF}"
 PREFIX="/usr/local"
 LIBEXEC="$PREFIX/libexec"
 BIN="$PREFIX/bin"
