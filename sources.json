@@ -1,0 +1,27 @@
+[
+  {
+    "name": "hunshcn/gh-proxy opt-in issue #116",
+    "type": "github_issue_optin",
+    "repo": "hunshcn/gh-proxy",
+    "issue": 116,
+    "trust": "optin"
+  },
+  {
+    "name": "weekoo2025/Ghproxy mirrors.json",
+    "type": "json_urls",
+    "url": "https://raw.githubusercontent.com/weekoo2025/Ghproxy/main/mirrors.json",
+    "trust": "hint"
+  },
+  {
+    "name": "iptvjs/iptv README",
+    "type": "text_urls",
+    "url": "https://raw.githubusercontent.com/iptvjs/iptv/main/README.md",
+    "trust": "hint"
+  },
+  {
+    "name": "iwyxdxl/WeChatBot_WXAUTO_SE updater",
+    "type": "text_urls",
+    "url": "https://raw.githubusercontent.com/iwyxdxl/WeChatBot_WXAUTO_SE/main/updater.py",
+    "trust": "hint"
+  }
+]
