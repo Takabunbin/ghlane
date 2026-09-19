@@ -10,10 +10,13 @@ command against GitHub instead.
 - GitHub and the GitHub Releases API are the integrity trust root.
 - Public acceleration mirrors are **not** trusted for content integrity.
 - `mirrors.txt` is the manually approved production mirror set.
-- Automated mirror discovery is quarantine-only. Discovered endpoints are
-  reported for review but are never promoted to the production registry
-  automatically.
-- `registry-v1.txt` is a health-filtered view of the manually approved set.
+- Automated mirror discovery is untrusted input. Discovery runs in a read-only
+  job and cannot modify the repository.
+- `registry-v1.txt` may include bounded, health-checked discovered endpoints.
+  v1 clients do not trust those endpoints: every accelerated asset is verified
+  against GitHub's SHA-256 metadata before it becomes visible to the caller.
+- Legacy `registry.txt` is restricted to manually approved mirrors because
+  0.2.0 clients do not have end-to-end digest verification.
 
 ## Integrity
 
@@ -78,8 +81,9 @@ External discovery sources are untrusted hints.
 - Existing registry membership does not become first-party trust.
 - Denylisted/retired endpoints are excluded.
 - Discovery runs read-only and publishes only a workflow artifact/report.
-- A separate write-scoped job rebuilds production registry files solely from
-  `mirrors.txt`.
+- A separate write-scoped job consumes that artifact strictly as URL data,
+  performs byte-for-byte canary checks, and may place verified discoveries only
+  in the versioned v1 registry. The legacy registry remains manual-only.
 
 ## Installer and updates
 
