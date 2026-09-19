@@ -537,8 +537,8 @@ file_matches_digest() {
 }
 
 run_candidate_to_file() {
-  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" target arg i
-  shift 5
+  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" max_size="$6" target arg i blocks
+  shift 6
   local args=("$@")
   target=$(candidate_url "$candidate" "$url")
 
@@ -563,7 +563,15 @@ run_candidate_to_file() {
     fi
   done
 
-  "$real" "${args[@]}"
+  blocks=$(( (max_size + 1023) / 1024 ))
+  (( blocks > 0 )) || blocks=1
+  (
+    # Bound untrusted mirror output to roughly the GitHub-declared asset size.
+    # Linux/Bash file-size limits use KiB units; digest+exact-size validation
+    # below rejects the final partial block if a mirror sends extra bytes.
+    ulimit -f "$blocks" 2>/dev/null || true
+    "$real" "${args[@]}"
+  )
 }
 
 verified_transfer() {
@@ -577,7 +585,7 @@ verified_transfer() {
   mode=$(printf '%03o' "$(( 0666 & ~$(umask) ))")
   chmod "$mode" "$tmp" 2>/dev/null || true
 
-  run_candidate_to_file "$tool" "$real" "$url" "$candidate" "$tmp" "$@"
+  run_candidate_to_file "$tool" "$real" "$url" "$candidate" "$tmp" "$size" "$@"
   status=$?
   if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
     mv -fT -- "$tmp" "$out"
@@ -597,7 +605,7 @@ verified_transfer() {
     log 'mirror transfer failed verification; retrying direct'
     tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
     chmod "$mode" "$tmp" 2>/dev/null || true
-    run_candidate_to_file "$tool" "$real" "$url" DIRECT "$tmp" "$@"
+    run_candidate_to_file "$tool" "$real" "$url" DIRECT "$tmp" "$size" "$@"
     status=$?
     if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
       mv -fT -- "$tmp" "$out"
@@ -632,7 +640,7 @@ is_route_failure() {
   local tool="$1" status="$2"
   case "$tool:$status" in
     curl:5|curl:6|curl:7|curl:16|curl:18|curl:22|curl:28|curl:35|curl:47|curl:52|curl:55|curl:56|curl:60|curl:92|\
-    wget:4|wget:5|wget:8) return 0 ;;
+    wget:4|wget:5|wget:8|curl:153|wget:153) return 0 ;;
     *) return 1 ;;
   esac
 }
