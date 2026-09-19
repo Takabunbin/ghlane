@@ -120,9 +120,8 @@ fi
 
 "${SUDO[@]}" mkdir -p "$LIBEXEC" "$BIN" "$ETC"
 
-# Each replacement is atomic within its target filesystem. Mirrors/config go
-# first because both old and new cores can safely consume them; the executable
-# is switched last, avoiding a half-upgraded core/config pair.
+# Each replacement is staged in its target filesystem, then atomically moved.
+# The commit order below preserves a safe old/new compatibility boundary.
 core_new="$LIBEXEC/.ghlane.new.$$"
 mirrors_new="$ETC/.mirrors.new.$$"
 conf_new="/etc/.ghlane.conf.new.$$"
@@ -132,14 +131,16 @@ cleanup_targets() {
 }
 trap 'cleanup_targets; rm -rf "$tmp"' EXIT
 
+# Stage every replacement before committing any of them. Commit order is
+# mirrors -> core -> config: the new core safely tolerates the old 0.2.0
+# registry config, while the old core must never be left pointing at dynamic v1.
 "${SUDO[@]}" install -m 0644 "$tmp/mirrors.txt" "$mirrors_new"
-"${SUDO[@]}" mv -f "$mirrors_new" "$ETC/mirrors.txt"
-
 "${SUDO[@]}" install -m 0644 "$tmp/ghlane.conf" "$conf_new"
-"${SUDO[@]}" mv -f "$conf_new" "$CONF"
-
 "${SUDO[@]}" install -m 0755 "$tmp/ghlane" "$core_new"
+
+"${SUDO[@]}" mv -f "$mirrors_new" "$ETC/mirrors.txt"
 "${SUDO[@]}" mv -f "$core_new" "$LIBEXEC/ghlane"
+"${SUDO[@]}" mv -f "$conf_new" "$CONF"
 
 "${SUDO[@]}" ln -sfn "$LIBEXEC/ghlane" "$BIN/ghlane"
 
