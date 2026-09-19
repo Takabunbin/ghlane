@@ -490,12 +490,15 @@ expected_release_digest() {
   command -v sha256sum >/dev/null 2>&1 || return 1
 
   dir="$CACHE_DIR/digests"
-  mkdir -p "$dir" 2>/dev/null || return 1
   key=$(printf '%s' "$url" | sha256sum | awk '{print $1}')
   cache="$dir/$key"
   now=$(date +%s)
 
-  if [[ -r "$cache" ]]; then
+  if (( DIGEST_TTL > 0 )); then
+    mkdir -p "$dir" 2>/dev/null || return 1
+  fi
+
+  if (( DIGEST_TTL > 0 )) && [[ -r "$cache" ]]; then
     read -r ts digest size <"$cache" || true
     if [[ "${ts:-}" =~ ^[0-9]+$ ]]; then
       age=$((now - ts))
@@ -568,12 +571,16 @@ PY
   if [[ "$parsed" =~ ^([0-9a-f]{64})[[:space:]]+([0-9]+)$ ]]; then
     digest="${BASH_REMATCH[1]}"
     size="${BASH_REMATCH[2]}"
-    printf '%s %s %s\n' "$now" "$digest" "$size" >"$cache.tmp.$$" && mv "$cache.tmp.$$" "$cache"
+    if (( DIGEST_TTL > 0 )); then
+      printf '%s %s %s\n' "$now" "$digest" "$size" >"$cache.tmp.$" && mv "$cache.tmp.$" "$cache"
+    fi
     printf '%s %s\n' "$digest" "$size"
     return 0
   fi
 
-  printf '%s NONE 0\n' "$now" >"$cache.tmp.$$" && mv "$cache.tmp.$$" "$cache"
+  if (( DIGEST_TTL > 0 )); then
+    printf '%s NONE 0\n' "$now" >"$cache.tmp.$" && mv "$cache.tmp.$" "$cache"
+  fi
   return 1
 }
 
