@@ -564,11 +564,12 @@ run_candidate_to_file() {
   done
 
   blocks=$(( (max_size + 1023) / 1024 ))
-  (( blocks > 0 )) || blocks=1
+  (( blocks >= 64 )) || blocks=64
   (
     # Bound untrusted mirror output to roughly the GitHub-declared asset size.
-    # Linux/Bash file-size limits use KiB units; digest+exact-size validation
-    # below rejects the final partial block if a mirror sends extra bytes.
+    # Linux/Bash file-size limits use KiB units. Keep a small 64 KiB floor so
+    # helper/runtime writes are not starved for tiny assets; digest+exact-size
+    # validation still rejects every extra byte before commit.
     ulimit -f "$blocks" 2>/dev/null || true
     "$real" "${args[@]}"
   )
