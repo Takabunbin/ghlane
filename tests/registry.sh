@@ -231,11 +231,12 @@ set +e
 run_curl "$URL" -o "$TMP/http-fail" >/dev/null 2>&1
 rc=$?
 set -e
-if [[ $rc -eq 22 && ! -e "$TMP/cache/best" && ! -e "$TMP/cache/registry.stamp" &&
+if [[ $rc -eq 0 && "$(cat "$TMP/http-fail" 2>/dev/null)" == 'OK' &&
+      ! -e "$TMP/cache/best" && ! -e "$TMP/cache/registry.stamp" &&
       -e "$TMP/cache/registry" ]]; then
-  pass 'mirror HTTP failure clears route and schedules registry refresh'
+  pass 'mirror HTTP failure retries DIRECT and schedules registry refresh'
 else
-  fail 'mirror HTTP failure clears route and schedules registry refresh'
+  fail 'mirror HTTP failure retries DIRECT and schedules registry refresh'
 fi
 
 printf '========================================\n'
