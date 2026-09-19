@@ -513,6 +513,20 @@ PY
   return 1
 }
 
+digest_cache_file() {
+  local url="$1" key
+  command -v sha256sum >/dev/null 2>&1 || return 1
+  key=$(printf '%s' "$url" | sha256sum | awk '{print $1}') || return 1
+  printf '%s/digests/%s\n' "$CACHE_DIR" "$key"
+}
+
+refresh_release_digest() {
+  local url="$1" cache
+  cache=$(digest_cache_file "$url") || return 1
+  rm -f "$cache" 2>/dev/null || true
+  expected_release_digest "$url"
+}
+
 file_matches_digest() {
   local file="$1" digest="$2" size="$3" actual_size actual_digest
   [[ -f "$file" ]] || return 1
@@ -555,7 +569,7 @@ run_candidate_to_file() {
 verified_transfer() {
   local tool="$1" real="$2" url="$3" candidate="$4" out="$5" digest="$6" size="$7"
   shift 7
-  local dir base tmp mode status
+  local dir base tmp mode status fresh
 
   dir=$(dirname -- "$out")
   base=$(basename -- "$out")
@@ -568,6 +582,13 @@ verified_transfer() {
   if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
     mv -f -- "$tmp" "$out"
     return $?
+  fi
+
+  # Local write/argument failures are not route failures. Do not evict a good
+  # mirror or retry the same local failure against GitHub.
+  if (( status != 0 )) && ! is_route_failure "$tool" "$status"; then
+    rm -f "$tmp"
+    return "$status"
   fi
   rm -f "$tmp"
 
@@ -582,11 +603,28 @@ verified_transfer() {
       mv -f -- "$tmp" "$out"
       return $?
     fi
-    rm -f "$tmp"
+    if (( status != 0 )); then
+      rm -f "$tmp"
+      return "$status"
+    fi
   fi
 
+  # GitHub allows release assets to be replaced under the same URL. If a
+  # direct download disagrees with cached metadata, refresh metadata once and
+  # validate the already-downloaded direct file again before failing closed.
+  if [[ -f "$tmp" ]] && fresh=$(refresh_release_digest "$url" 2>/dev/null); then
+    read -r digest size <<<"$fresh"
+    if file_matches_digest "$tmp" "$digest" "$size"; then
+      mv -f -- "$tmp" "$out"
+      return $?
+    fi
+  fi
+
+  rm -f "$tmp"
   log 'download failed GitHub digest verification'
-  (( status == 0 )) && status=18
+  if (( status == 0 )); then
+    [[ "$tool" == curl ]] && status=18 || status=4
+  fi
   return "$status"
 }
 
@@ -599,31 +637,6 @@ is_route_failure() {
   esac
 }
 
-replace_url_and_run() {
-  local tool="$1" real="$2" url="$3" candidate="$4" target status i
-  shift 4
-  local args=("$@")
-  target=$(candidate_url "$candidate" "$url")
-
-  for i in "${!args[@]}"; do
-    if [[ "${args[$i]}" == "$url" ]]; then
-      args[$i]="$target"
-    elif [[ "${args[$i]}" == "--url=$url" ]]; then
-      args[$i]="--url=$target"
-    fi
-  done
-
-  "$real" "${args[@]}"
-  status=$?
-  if (( status != 0 )) && is_route_failure "$tool" "$status"; then
-    rm -f "$CACHE_DIR/best" 2>/dev/null || true
-    if [[ "$candidate" != DIRECT ]]; then
-      rm -f "$CACHE_DIR/registry.stamp" 2>/dev/null || true
-      log 'route failed; cache cleared and registry refresh scheduled'
-    fi
-  fi
-  return "$status"
-}
 
 proxy_tool() {
   local tool="$1" real="$2" url candidate out digest_info digest size
