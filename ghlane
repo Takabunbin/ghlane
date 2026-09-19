@@ -139,27 +139,59 @@ args_are_safe() {
   (( needs_value == 0 ))
 }
 
-config_has_sensitive_directive() {
-  local file="$1"
+system_config_requires_bypass() {
+  local tool="$1" file="$2"
   [[ -r "$file" ]] || return 1
-  grep -Eiq '^[[:space:]]*(header|user|password|http_user|http_password|ftp_user|ftp_password|proxy_user|proxy_password|referer|load_cookies|save_cookies|use_proxy|http_proxy|https_proxy|ftp_proxy|no_proxy|certificate|private_key|ca_certificate|ca_directory)[[:space:]]*=' "$file"
+
+  case "$tool" in
+    curl)
+      # curl config syntax accepts both short and long command-line options.
+      # System curlrc files are uncommon; any active directive is safer to
+      # treat as an intentional semantic override.
+      grep -Eqv '^[[:space:]]*($|#)' "$file"
+      ;;
+    wget)
+      # GNU Wget command names are case-, '-'-, and '_'-insensitive. Debian's
+      # stock global wgetrc has only passive_ftp=on active, which is irrelevant
+      # to HTTPS. Any other active directive is conservatively bypassed.
+      awk '
+        /^[[:space:]]*($|#)/ { next }
+        {
+          key=$0
+          sub(/=.*/, "", key)
+          gsub(/[[:space:]_-]/, "", key)
+          key=tolower(key)
+          if (key == "passiveftp") next
+          found=1
+          exit
+        }
+        END { exit(found ? 0 : 1) }
+      ' "$file"
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 has_implicit_config() {
-  local tool="$1"
+  local tool="$1" passwd_home=""
   [[ -n "${HOME:-}" && -f "$HOME/.netrc" ]] && return 0
   case "$tool" in
     curl)
       [[ -n "${CURL_HOME:-}" && -f "$CURL_HOME/.curlrc" ]] && return 0
       [[ -n "${XDG_CONFIG_HOME:-}" && -f "$XDG_CONFIG_HOME/curlrc" ]] && return 0
       [[ -n "${HOME:-}" && -f "$HOME/.curlrc" ]] && return 0
-      config_has_sensitive_directive /etc/curlrc && return 0
-      config_has_sensitive_directive /usr/local/etc/curlrc && return 0
+      if command -v getent >/dev/null 2>&1; then
+        passwd_home=$(getent passwd "${EUID:-$(id -u)}" 2>/dev/null | awk -F: 'NR==1 {print $6}')
+        [[ -n "$passwd_home" && -f "$passwd_home/.curlrc" ]] && return 0
+      fi
+      system_config_requires_bypass curl /etc/curlrc && return 0
+      system_config_requires_bypass curl /usr/local/etc/curlrc && return 0
       ;;
     wget)
       [[ -n "${WGETRC:-}" ]] && return 0
       [[ -n "${HOME:-}" && -f "$HOME/.wgetrc" ]] && return 0
-      config_has_sensitive_directive /etc/wgetrc && return 0
+      system_config_requires_bypass wget /etc/wgetrc && return 0
+      system_config_requires_bypass wget /usr/local/etc/wgetrc && return 0
       ;;
   esac
   return 1
