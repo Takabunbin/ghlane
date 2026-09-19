@@ -36,6 +36,10 @@ run_install() {
   bash "$TMP/install.sh"
 }
 
+run_uninstall() {
+  bash "$TMP/uninstall.sh"
+}
+
 run_case() {
   local name="$1" fn="$2"
   if ( set -e; "$fn" ); then
@@ -122,22 +126,83 @@ case_bad_upgrade() {
   ghlane self-test >/dev/null
 }
 
+case_uninstall() {
+  reset_system
+  run_install >/dev/null
+  mkdir -p "$HOME/.cache/ghlane"
+  : >"$HOME/.cache/ghlane/best"
+
+  run_uninstall >/dev/null
+
+  test ! -e /usr/local/bin/curl
+  test ! -e /usr/local/bin/wget
+  test ! -e /usr/local/bin/ghlane
+  test ! -e /usr/local/libexec/ghlane
+  test ! -e /etc/ghlane.conf
+  test ! -e /etc/ghlane/mirrors.txt
+  test ! -e "$HOME/.cache/ghlane"
+  test -x /usr/bin/curl
+}
+
+case_uninstall_idempotent() {
+  reset_system
+  run_install >/dev/null
+  run_uninstall >/dev/null
+  run_uninstall >/dev/null
+  test ! -e /usr/local/libexec/ghlane
+}
+
+case_custom_survives_uninstall() {
+  reset_system
+  mkdir -p /usr/local/bin
+  printf '#!/usr/bin/env bash\necho custom-curl\n' >/usr/local/bin/curl
+  printf '#!/usr/bin/env bash\necho custom-wget\n' >/usr/local/bin/wget
+  chmod 0755 /usr/local/bin/curl /usr/local/bin/wget
+
+  local curl_before wget_before
+  curl_before=$(sha256sum /usr/local/bin/curl)
+  wget_before=$(sha256sum /usr/local/bin/wget)
+
+  run_install >/dev/null 2>&1
+  run_uninstall >/dev/null
+
+  test "$curl_before" = "$(sha256sum /usr/local/bin/curl)"
+  test "$wget_before" = "$(sha256sum /usr/local/bin/wget)"
+  test ! -e /usr/local/libexec/ghlane
+}
+
+case_reinstall_after_uninstall() {
+  reset_system
+  run_install >/dev/null
+  run_uninstall >/dev/null
+  run_install >/dev/null
+  test "$(ghlane version)" = "ghlane 0.1.10"
+  ghlane self-test >/dev/null
+}
+
 case_nonroot_sudo() {
   reset_system
   id ghlane-test >/dev/null 2>&1 || useradd -m -s /bin/bash ghlane-test
   printf 'ghlane-test ALL=(ALL) NOPASSWD:ALL\n' >/etc/sudoers.d/ghlane-test
   chmod 0440 /etc/sudoers.d/ghlane-test
+
   sudo -u ghlane-test -H env PATH=/usr/local/bin:/usr/bin:/bin bash "$TMP/install.sh" >/dev/null
   test "$(ghlane version)" = "ghlane 0.1.10"
   ghlane self-test >/dev/null
+
+  sudo -u ghlane-test -H env PATH=/usr/local/bin:/usr/bin:/bin bash "$TMP/uninstall.sh" >/dev/null
+  test ! -e /usr/local/libexec/ghlane
+  test -x /usr/bin/curl
 }
 
 printf '========================================\n'
-printf ' ghlane installer matrix\n'
+printf ' ghlane installer lifecycle matrix\n'
 printf '========================================\n'
 
 make_source "$TMP/source"
 make_installer "$TMP/source" "$TMP/install.sh"
+cp "$ROOT/uninstall.sh" "$TMP/uninstall.sh"
+chmod 0755 "$TMP/uninstall.sh"
 
 run_case 'missing wget' case_missing_wget
 
@@ -149,7 +214,11 @@ run_case 'repeat install is idempotent' case_reinstall
 run_case 'custom /usr/local/bin/curl is preserved' case_custom_curl
 run_case 'custom /usr/local/bin/wget is preserved' case_custom_wget
 run_case 'bad upgrade leaves working install untouched' case_bad_upgrade
-run_case 'non-root install via sudo' case_nonroot_sudo
+run_case 'safe uninstall removes only ghlane files' case_uninstall
+run_case 'repeat uninstall is idempotent' case_uninstall_idempotent
+run_case 'custom curl/wget survive uninstall' case_custom_survives_uninstall
+run_case 'reinstall after uninstall works' case_reinstall_after_uninstall
+run_case 'non-root install and uninstall via sudo' case_nonroot_sudo
 
 printf '========================================\n'
 printf 'PASS=%d  FAIL=%d\n' "$PASS" "$FAIL"
