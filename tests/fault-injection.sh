@@ -81,7 +81,7 @@ if (( probe )); then
     https://dns.example/*) speed=9000000; rc=6 ;;
     https://refused.example/*) speed=9000000; rc=7 ;;
     https://partial.example/*) speed=9000000; bytes=500000; rc=18 ;;
-    https://timeout.example/*) speed=99999999; bytes=500000; rc=28 ;;
+    https://timeout.example/*) speed=250000; bytes=500000; rc=28 ;;
     https://toolarge.example/*) speed=99999999; bytes=1048577; rc=63 ;;
     https://badbin.example/*) speed=99999999 ;;
     https://github.com/*)
@@ -212,7 +212,7 @@ expect_probe_rejected 'HTTP 503 probe rejected' 'https://503.example'
 expect_probe_rejected 'DNS failure (curl 6) rejected' 'https://dns.example'
 expect_probe_rejected 'connection refused (curl 7) rejected' 'https://refused.example'
 expect_probe_rejected 'partial transfer (curl 18) rejected' 'https://partial.example'
-expect_probe_rejected 'timeout after partial data (curl 28) rejected' 'https://timeout.example'
+expect_probe_rejected 'timed partial sample cannot beat a faster completed probe' 'https://timeout.example'
 expect_probe_rejected 'oversized/range-ignored probe rejected' 'https://toolarge.example'
 expect_probe_rejected 'HTML 200 probe rejected' 'https://html.example'
 expect_probe_rejected 'zero-byte probe rejected' 'https://zero.example'
@@ -232,7 +232,13 @@ reset
 printf '%s\n' 'https://timeout.example' >"$MIRRORS"
 DIRECT_PROBE_FAIL=1
 run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1 || true
-expect_route 'all probes fail -> DIRECT fallback' 'DIRECT'
+expect_route 'timed partial sample is usable when faster routes are unavailable' 'https://timeout.example'
+
+reset
+printf '%s\n' 'https://dns.example' >"$MIRRORS"
+DIRECT_PROBE_FAIL=1
+run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1 || true
+expect_route 'all real probe failures -> DIRECT fallback' 'DIRECT'
 
 reset
 printf '\n# comment\nhttp://insecure.example\nnot-a-url\nhttps://good.example\n' >"$MIRRORS"
