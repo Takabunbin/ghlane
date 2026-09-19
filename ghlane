@@ -61,7 +61,7 @@ args_are_safe() {
       curl:--output|curl:--retry|curl:--retry-delay|\
       curl:--retry-max-time|curl:--max-time|curl:--connect-timeout|\
       curl:--speed-limit|curl:--speed-time|curl:--limit-rate|\
-      curl:--max-filesize|\
+      curl:--max-filesize|curl:--url|\
       wget:--output-document|wget:--tries|\
       wget:--timeout|wget:--connect-timeout|wget:--read-timeout|\
       wget:--dns-timeout|wget:--wait|wget:--waitretry|wget:--limit-rate|\
@@ -72,7 +72,7 @@ args_are_safe() {
       curl:--output=*|curl:--retry=*|curl:--retry-delay=*|\
       curl:--retry-max-time=*|curl:--max-time=*|curl:--connect-timeout=*|\
       curl:--speed-limit=*|curl:--speed-time=*|curl:--limit-rate=*|\
-      curl:--max-filesize=*|\
+      curl:--max-filesize=*|curl:--url=*|\
       wget:--output-document=*|wget:--tries=*|\
       wget:--timeout=*|wget:--connect-timeout=*|wget:--read-timeout=*|\
       wget:--dns-timeout=*|wget:--wait=*|wget:--waitretry=*|wget:--limit-rate=*|\
@@ -350,6 +350,220 @@ select_candidate() {
   printf '%s\n' "$candidate"
 }
 
+explicit_output_path() {
+  local tool="$1" arg out="" count=0 i=0 next=0
+  shift
+  local args=("$@")
+
+  while (( i < ${#args[@]} )); do
+    arg="${args[$i]}"
+    if (( next )); then
+      out="$arg"
+      count=$((count + 1))
+      next=0
+      i=$((i + 1))
+      continue
+    fi
+
+    case "$tool:$arg" in
+      curl:-o|curl:--output|wget:-O|wget:--output-document)
+        next=1
+        ;;
+      curl:--output=*|wget:--output-document=*)
+        out="${arg#*=}"
+        count=$((count + 1))
+        ;;
+      curl:-*)
+        if [[ "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
+          out="${BASH_REMATCH[2]}"
+          count=$((count + 1))
+        fi
+        ;;
+      wget:-*)
+        if [[ "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
+          out="${BASH_REMATCH[2]}"
+          count=$((count + 1))
+        fi
+        ;;
+    esac
+    i=$((i + 1))
+  done
+
+  (( next == 0 && count == 1 )) || return 1
+  [[ -n "$out" && "$out" != '-' ]] || return 1
+  [[ ! -e "$out" && ! -L "$out" ]] || return 1
+  printf '%s\n' "$out"
+}
+
+expected_release_digest() {
+  local url="$1" key dir cache now ts digest size age api meta parsed tmp
+  command -v python3 >/dev/null 2>&1 || return 1
+  command -v sha256sum >/dev/null 2>&1 || return 1
+
+  dir="$CACHE_DIR/digests"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  key=$(printf '%s' "$url" | sha256sum | awk '{print $1}')
+  cache="$dir/$key"
+  now=$(date +%s)
+
+  if [[ -r "$cache" ]]; then
+    read -r ts digest size <"$cache" || true
+    if [[ "${ts:-}" =~ ^[0-9]+$ ]]; then
+      age=$((now - ts))
+      if (( age >= 0 && age < DIGEST_TTL )); then
+        [[ "$digest" == NONE ]] && return 1
+        if [[ "$digest" =~ ^[0-9a-f]{64}$ && "$size" =~ ^[0-9]+$ ]]; then
+          printf '%s %s\n' "$digest" "$size"
+          return 0
+        fi
+      fi
+    fi
+  fi
+
+  parsed=$(python3 - "$url" <<'PY' 2>/dev/null
+import sys
+from urllib.parse import quote, unquote, urlsplit
+
+u = urlsplit(sys.argv[1])
+parts = u.path.split('/')
+if u.scheme != 'https' or u.netloc != 'github.com' or len(parts) != 7:
+    raise SystemExit(1)
+if parts[3:5] != ['releases', 'download']:
+    raise SystemExit(1)
+owner, repo = unquote(parts[1]), unquote(parts[2])
+tag, asset = unquote(parts[5]), unquote(parts[6])
+if not owner or not repo or not tag or not asset:
+    raise SystemExit(1)
+api = f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/releases/tags/{quote(tag, safe='')}"
+print(api)
+print(asset)
+PY
+  ) || return 1
+
+  api=${parsed%%$'\n'*}
+  meta=${parsed#*$'\n'}
+  [[ -n "$api" && -n "$meta" && "$api" != "$parsed" ]] || return 1
+
+  tmp=$(mktemp "${TMPDIR:-/tmp}/ghlane-meta.XXXXXX") || return 1
+  if ! "$REAL_CURL" -q -fsSL \
+    --connect-timeout 3 \
+    --max-time 8 \
+    --max-filesize 1048576 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$api" -o "$tmp" 2>/dev/null
+  then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  parsed=$(python3 - "$tmp" "$meta" <<'PY' 2>/dev/null
+import json, re, sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    data = json.load(f)
+name = sys.argv[2]
+for asset in data.get('assets', []):
+    if asset.get('name') != name:
+        continue
+    digest = asset.get('digest')
+    size = asset.get('size')
+    if isinstance(digest, str) and re.fullmatch(r'sha256:[0-9a-fA-F]{64}', digest) and isinstance(size, int) and size >= 0:
+        print(digest.split(':', 1)[1].lower(), size)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+  )
+  rm -f "$tmp"
+
+  if [[ "$parsed" =~ ^([0-9a-f]{64})[[:space:]]+([0-9]+)$ ]]; then
+    digest="${BASH_REMATCH[1]}"
+    size="${BASH_REMATCH[2]}"
+    printf '%s %s %s\n' "$now" "$digest" "$size" >"$cache.tmp.$$" && mv "$cache.tmp.$$" "$cache"
+    printf '%s %s\n' "$digest" "$size"
+    return 0
+  fi
+
+  printf '%s NONE 0\n' "$now" >"$cache.tmp.$$" && mv "$cache.tmp.$$" "$cache"
+  return 1
+}
+
+file_matches_digest() {
+  local file="$1" digest="$2" size="$3" actual_size actual_digest
+  [[ -f "$file" ]] || return 1
+  actual_size=$(wc -c <"$file") || return 1
+  [[ "$actual_size" == "$size" ]] || return 1
+  actual_digest=$(sha256sum "$file" | awk '{print $1}') || return 1
+  [[ "$actual_digest" == "$digest" ]]
+}
+
+run_candidate_to_file() {
+  local real="$1" url="$2" candidate="$3" out="$4" target arg i
+  shift 4
+  local args=("$@")
+  target=$(candidate_url "$candidate" "$url")
+
+  for i in "${!args[@]}"; do
+    arg="${args[$i]}"
+    if [[ "$arg" == "$url" ]]; then
+      args[$i]="$target"
+    elif [[ "$arg" == "--url=$url" ]]; then
+      args[$i]="--url=$target"
+    elif [[ "$arg" == -o || "$arg" == --output || "$arg" == -O || "$arg" == --output-document ]]; then
+      if (( i + 1 < ${#args[@]} )); then
+        args[$((i + 1))]="$out"
+      fi
+    elif [[ "$arg" == --output=* ]]; then
+      args[$i]="--output=$out"
+    elif [[ "$arg" == --output-document=* ]]; then
+      args[$i]="--output-document=$out"
+    elif [[ "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
+      args[$i]="${BASH_REMATCH[1]}$out"
+    elif [[ "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
+      args[$i]="${BASH_REMATCH[1]}$out"
+    fi
+  done
+
+  "$real" "${args[@]}"
+}
+
+verified_transfer() {
+  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" digest="$6" size="$7"
+  shift 7
+  local dir base tmp mode status=0
+
+  dir=$(dirname -- "$out")
+  base=$(basename -- "$out")
+  tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
+  mode=$(printf '%03o' "$(( 0666 & ~$(umask) ))")
+  chmod "$mode" "$tmp" 2>/dev/null || true
+
+  if run_candidate_to_file "$real" "$url" "$candidate" "$tmp" "$@" && file_matches_digest "$tmp" "$digest" "$size"; then
+    mv -f -- "$tmp" "$out"
+    return $?
+  fi
+
+  status=$?
+  rm -f "$tmp"
+
+  if [[ "$candidate" != DIRECT ]]; then
+    rm -f "$CACHE_DIR/best" "$CACHE_DIR/registry.stamp" 2>/dev/null || true
+    log 'mirror transfer failed verification; retrying direct'
+    tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
+    chmod "$mode" "$tmp" 2>/dev/null || true
+    if run_candidate_to_file "$real" "$url" DIRECT "$tmp" "$@" && file_matches_digest "$tmp" "$digest" "$size"; then
+      mv -f -- "$tmp" "$out"
+      return $?
+    fi
+    status=$?
+    rm -f "$tmp"
+  fi
+
+  log 'download failed GitHub digest verification'
+  (( status == 0 )) && status=18
+  return "$status"
+}
+
 is_route_failure() {
   local tool="$1" status="$2"
   case "$tool:$status" in
@@ -386,7 +600,7 @@ replace_url_and_run() {
 }
 
 proxy_tool() {
-  local tool="$1" real="$2" url candidate
+  local tool="$1" real="$2" url candidate out digest_info digest size
   shift 2
 
   [[ "${GHLANE_BYPASS:-0}" == 1 ]] && exec "$real" "$@"
@@ -394,8 +608,11 @@ proxy_tool() {
   has_implicit_config "$tool" && exec "$real" "$@"
   args_are_safe "$tool" "$@" || exec "$real" "$@"
   url=$(find_single_url "$@") || exec "$real" "$@"
+  out=$(explicit_output_path "$tool" "$@") || exec "$real" "$@"
+  digest_info=$(expected_release_digest "$url") || exec "$real" "$@"
+  read -r digest size <<<"$digest_info"
   candidate=$(select_candidate "$url")
-  replace_url_and_run "$tool" "$real" "$url" "$candidate" "$@"
+  verified_transfer "$tool" "$real" "$url" "$candidate" "$out" "$digest" "$size" "$@"
 }
 
 self_test() {
