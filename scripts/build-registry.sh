@@ -141,34 +141,39 @@ STABLE_LIMIT=$STABLE_SLOTS
 PUBLISHED=0
 
 if [[ -r "$STABLE_FILE" ]]; then
-  while read -r _ mirror; do
-  (( PUBLISHED >= MAX_MIRRORS )) && break
-  [[ -n "$mirror" ]] || continue
-  [[ -z "${SELECTED[$mirror]:-}" ]] || continue
-  printf '%s\n' "$mirror" >>"$OUT"
-  SELECTED["$mirror"]=1
-  PUBLISHED=$((PUBLISHED + 1))
-done < <(sort "$EXPLORE")
-
-if (( PUBLISHED < MIN_HEALTHY )); then
-  echo "registry-health: only $PUBLISHED publishable mirror(s); keeping existing registry" >&2
-  exit 1
+  while IFS= read -r mirror || [[ -n "$mirror" ]]; do
+    mirror="${mirror//$'\r'/}"
+    [[ -z "$mirror" || "$mirror" == \#* ]] && continue
+    [[ -n "${IS_HEALTHY[$mirror]:-}" ]] || continue
+    [[ -z "${SELECTED[$mirror]:-}" ]] || continue
+    printf '%s\n' "$mirror" >>"$OUT"
+    SELECTED["$mirror"]=1
+    PUBLISHED=$((PUBLISHED + 1))
+    (( PUBLISHED >= STABLE_LIMIT )) && break
+  done <"$STABLE_FILE"
 fi
 
-mkdir -p "$(dirname "$OUTPUT_FILE")"
-mv "$OUT" "$OUTPUT_FILE"
+# ponytail: five stable slots plus weekly rotating exploration slots avoid
+# persistent health-history state while ensuring new mirrors are not starved.
+# If the pool routinely exceeds 128 or rotation churn becomes harmful, add
+# capped reliability history instead of increasing client probe fan-out.
+EXPLORE="$TMP/explore"
+WEEK=$(date -u +%G-%V)
+: >"$EXPLORE"
 
-echo "healthy candidates: $TOTAL_HEALTHY"
-echo "published: $PUBLISHED (stable<=${STABLE_LIMIT}, exploration=$((PUBLISHED > STABLE_LIMIT ? PUBLISHED - STABLE_LIMIT : 0)))"
-echo "registry: $OUTPUT_FILE"
-\t' read -r _ mirror; do
+for mirror in "${HEALTHY_LIST[@]}"; do
+  [[ -z "${SELECTED[$mirror]:-}" ]] || continue
+  key=$(printf '%s' "$WEEK|$mirror" | sha256sum | awk '{print $1}')
+  printf '%s\t%s\n' "$key" "$mirror" >>"$EXPLORE"
+done
+
+while read -r _ mirror; do
   (( PUBLISHED >= MAX_MIRRORS )) && break
   [[ -n "$mirror" ]] || continue
   [[ -z "${SELECTED[$mirror]:-}" ]] || continue
   printf '%s\n' "$mirror" >>"$OUT"
   SELECTED["$mirror"]=1
   PUBLISHED=$((PUBLISHED + 1))
-  (( PUBLISHED >= MAX_MIRRORS )) && break
 done < <(sort "$EXPLORE")
 
 if (( PUBLISHED < MIN_HEALTHY )); then
