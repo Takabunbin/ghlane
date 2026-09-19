@@ -341,8 +341,32 @@ race_candidates() {
 }
 
 select_candidate() {
-  local url="$1" candidate
+  local url="$1" candidate lock_fd
   candidate=$(cached_candidate 2>/dev/null) && { printf '%s\n' "$candidate"; return; }
+
+  if command -v flock >/dev/null 2>&1 && mkdir -p "$CACHE_DIR" 2>/dev/null; then
+    exec {lock_fd}>"$CACHE_DIR/race.lock"
+    if flock -w 10 "$lock_fd"; then
+      if candidate=$(cached_candidate 2>/dev/null); then
+        flock -u "$lock_fd"
+        exec {lock_fd}>&-
+        printf '%s\n' "$candidate"
+        return
+      fi
+      maybe_refresh_registry
+      candidate=$(race_candidates "$url") || candidate="DIRECT"
+      save_candidate "$candidate"
+      flock -u "$lock_fd"
+      exec {lock_fd}>&-
+      log "selected $(candidate_label "$candidate")"
+      printf '%s\n' "$candidate"
+      return
+    fi
+    exec {lock_fd}>&-
+  fi
+
+  # ponytail: flock is an optional optimization. If unavailable or contended
+  # beyond the bounded wait, correctness does not depend on it.
   maybe_refresh_registry
   candidate=$(race_candidates "$url") || candidate="DIRECT"
   save_candidate "$candidate"
