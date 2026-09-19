@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="Takabunbin/ghlane"
 REF="${GHLANE_REF:-main}"
-BASE="${GHLANE_BASE:-https://cdn.jsdelivr.net/gh/${REPO}@${REF}}"
+BASE="${GHLANE_BASE:-}"
 PREFIX="/usr/local"
 LIBEXEC="$PREFIX/libexec"
 BIN="$PREFIX/bin"
@@ -20,23 +20,16 @@ fi
 old_real_curl=""
 old_real_wget=""
 if [[ -r "$CONF" ]]; then
-  cp "$CONF" "$tmp/ghlane.conf"
-  sed -i \
-    "s|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt'|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt'|" \
-    "$tmp/ghlane.conf"
+  REAL_CURL=""
+  REAL_WGET=""
+  # shellcheck disable=SC1090
+  . "$CONF"
+  old_real_curl="${REAL_CURL:-}"
+  old_real_wget="${REAL_WGET:-}"
+fi
 
-  set_assignment() {
-    local key="$1" value="$2" file="$3"
-    if grep -Eq "^${key}=" "$file"; then
-      sed -i "s|^${key}=.*|${key}='${value//|/\\|}'|" "$file"
-    else
-      printf "%s='%s'\n" "$key" "$value" >>"$file"
-    fi
-  }
-
-  # Preserve user tuning, but repair backend paths if an old backend vanished.
-  set_assignment REAL_CURL "$real_curl" "$tmp/ghlane.conf"
-  set_assignment REAL_WGET "${real_wget:-/usr/bin/wget}" "$tmp/ghlane.conf"
+if [[ -n "$old_real_curl" && -x "$old_real_curl" && "$old_real_curl" != "$LIBEXEC/ghlane" ]]; then
+  real_curl="$old_real_curl"
 else
   real_curl=$(PATH=/usr/bin:/bin command -v curl || true)
   [[ -n "$real_curl" ]] || real_curl=$(command -v curl || true)
@@ -52,6 +45,22 @@ fi
 [[ -n "$real_curl" && -x "$real_curl" ]] || { echo 'ghlane: curl is required for installation' >&2; exit 1; }
 real_curl=$(readlink -f "$real_curl")
 [[ -z "$real_wget" ]] || real_wget=$(readlink -f "$real_wget")
+
+# Resolve mutable main to one immutable commit before downloading the payload.
+if [[ -z "$BASE" ]]; then
+  if [[ "$REF" == main ]]; then
+    resolved=$("$real_curl" -q -fsSL --connect-timeout 5 --max-time 15 \
+      "https://api.github.com/repos/$REPO/commits/main" 2>/dev/null | \
+      grep -oE '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' | head -n1 | grep -oE '[0-9a-f]{40}' || true)
+    [[ "$resolved" =~ ^[0-9a-f]{40}$ ]] || {
+      echo 'ghlane: could not resolve main to an immutable commit; set GHLANE_REF to a 40-char commit SHA' >&2
+      exit 1
+    }
+    REF="$resolved"
+    printf 'ghlane: resolved main -> %s\n' "$REF" >&2
+  fi
+  BASE="https://cdn.jsdelivr.net/gh/${REPO}@${REF}"
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -75,6 +84,19 @@ if [[ -r "$CONF" ]]; then
   sed -i \
     "s|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt'|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt'|" \
     "$tmp/ghlane.conf"
+
+  set_assignment() {
+    local key="$1" value="$2" file="$3"
+    if grep -Eq "^${key}=" "$file"; then
+      sed -i "s|^${key}=.*|${key}='${value//|/\\|}'|" "$file"
+    else
+      printf "%s='%s'\n" "$key" "$value" >>"$file"
+    fi
+  }
+
+  # Preserve user tuning, but repair backend paths if an old backend vanished.
+  set_assignment REAL_CURL "$real_curl" "$tmp/ghlane.conf"
+  set_assignment REAL_WGET "${real_wget:-/usr/bin/wget}" "$tmp/ghlane.conf"
 else
   cat >"$tmp/ghlane.conf" <<CONF
 REAL_CURL='$real_curl'
