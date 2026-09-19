@@ -246,6 +246,20 @@ case_interrupted_upgrade_keeps_old_core_working() {
   ghlane self-test >/dev/null
 }
 
+case_unsafe_system_config_rejected() {
+  reset_system
+  run_install >/dev/null
+
+  chmod 0666 /etc/ghlane.conf
+  if run_install >/dev/null 2>&1; then
+    chmod 0644 /etc/ghlane.conf
+    return 1
+  fi
+
+  chmod 0644 /etc/ghlane.conf
+  ghlane self-test >/dev/null
+}
+
 case_nonroot_sudo() {
   reset_system
   id ghlane-test >/dev/null 2>&1 || useradd -m -s /bin/bash ghlane-test
@@ -283,6 +297,7 @@ run_case 'bad upgrade leaves working install untouched' case_bad_upgrade
 run_case 'reinstall preserves custom config' case_preserve_custom_config
 run_case 'reinstall repairs vanished backend paths' case_repair_missing_backend_path
 run_case 'old default registry URL migrates to registry-v1' case_migrate_default_registry_url
+run_case 'unsafe system config is rejected before sourcing' case_unsafe_system_config_rejected
 run_case 'interrupted upgrade before core switch keeps old core working' case_interrupted_upgrade_keeps_old_core_working
 run_case 'safe uninstall removes only ghlane files' case_uninstall
 run_case 'repeat uninstall is idempotent' case_uninstall_idempotent
