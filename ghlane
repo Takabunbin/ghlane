@@ -175,9 +175,9 @@ refresh_registry() {
   [[ "$REGISTRY_URL" == https://* ]] || return 1
   mkdir -p "$CACHE_DIR" 2>/dev/null || return 1
 
-  raw="$CACHE_DIR/registry.raw.$"
-  norm="$CACHE_DIR/registry.tmp.$"
-  stamp="$CACHE_DIR/registry.stamp.tmp.$"
+  raw="$CACHE_DIR/registry.raw.$$"
+  norm="$CACHE_DIR/registry.tmp.$$"
+  stamp="$CACHE_DIR/registry.stamp.tmp.$$"
   rm -f "$raw" "$norm" "$stamp"
 
   "$REAL_CURL" -q -fsSL \
