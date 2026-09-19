@@ -6,13 +6,14 @@ CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 
 if [[ -r "$CONFIG" ]]; then
   source_config=1
-  if [[ "$CONFIG" == /etc/ghlane.conf ]]; then
-    owner=$(stat -c '%u' "$CONFIG" 2>/dev/null || printf 'unsafe')
-    mode=$(stat -c '%a' "$CONFIG" 2>/dev/null || printf '777')
-    if [[ "$owner" != 0 || ! "$mode" =~ ^[0-7]+$ ]] || (( (8#$mode & 022) != 0 )); then
-      printf '[ghlane] refusing unsafe system config: %s\n' "$CONFIG" >&2
-      source_config=0
-    fi
+  owner=$(stat -c '%u' "$CONFIG" 2>/dev/null || printf 'unsafe')
+  mode=$(stat -c '%a' "$CONFIG" 2>/dev/null || printf '777')
+  euid=${EUID:-$(id -u)}
+  if [[ ! "$owner" =~ ^[0-9]+$ || ! "$mode" =~ ^[0-7]+$ ]] ||
+     { [[ "$owner" != 0 && "$owner" != "$euid" ]] || (( (8#$mode & 022) != 0 )); }
+  then
+    printf '[ghlane] refusing unsafe config: %s\n' "$CONFIG" >&2
+    source_config=0
   fi
   if (( source_config )); then
     # shellcheck disable=SC1090
