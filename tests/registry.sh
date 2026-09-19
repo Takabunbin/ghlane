@@ -45,6 +45,13 @@ done
 
 printf '%s\t%s\n' "$probe" "$target" >>"$FAKE_LOG"
 
+if [[ "$target" == 'https://api.github.com/repos/o/r/releases/tags/v1' ]]; then
+  cat >"$out" <<'JSON'
+{"assets":[{"name":"app.bin","browser_download_url":"https://github.com/o/r/releases/download/v1/app.bin","size":2,"digest":"sha256:565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"}]}
+JSON
+  exit 0
+fi
+
 if [[ "$target" == 'https://registry.example/registry-v1.txt' ]]; then
   case "${REGISTRY_MODE:-good}" in
     good)
