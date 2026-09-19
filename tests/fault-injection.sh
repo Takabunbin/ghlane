@@ -94,6 +94,7 @@ if (( probe )); then
     https://timeout.example/*) speed=250000; bytes=500000; rc=28 ;;
     https://toolarge.example/*) speed=99999999; bytes=1048577; rc=63 ;;
     https://badbin.example/*) speed=99999999 ;;
+    https://oversize.example/*) speed=99999998 ;;
     https://github.com/*)
       if [[ "${DIRECT_PROBE_FAIL:-0}" == 1 ]]; then
         speed=0
@@ -115,6 +116,15 @@ host="${host%%/*}"
 if [[ "$host" == 'badbin.example' ]]; then
   [[ -n "$out" && "$out" != /dev/null ]] && printf 'EVIL' >"$out" || printf 'EVIL'
   exit 0
+fi
+
+if [[ "$host" == 'oversize.example' ]]; then
+  if [[ -n "$out" && "$out" != /dev/null ]]; then
+    yes X | tr -d '\n' | head -c 4096 >"$out"
+    exit $?
+  fi
+  yes X | tr -d '\n' | head -c 4096
+  exit $?
 fi
 
 if [[ -n "${FINAL_FAIL_HOST:-}" && "$host" == "$FINAL_FAIL_HOST" ]]; then
@@ -516,6 +526,15 @@ if [[ "$(cat "$TMP/badbin.out" 2>/dev/null)" == 'OK' && "$(cached_route)" != 'ht
   pass 'wrong binary content is rejected by GitHub digest and retried DIRECT'
 else
   fail 'wrong binary content is rejected by GitHub digest and retried DIRECT'
+fi
+
+reset
+printf '%s\n' 'https://oversize.example' >"$MIRRORS"
+run_curl "$URL" -o "$TMP/oversize.out" >/dev/null 2>&1
+if [[ "$(cat "$TMP/oversize.out" 2>/dev/null)" == 'OK' && "$(cached_route)" != 'https://oversize.example' ]]; then
+  pass 'oversized mirror body is bounded, discarded and retried DIRECT'
+else
+  fail 'oversized mirror body is bounded, discarded and retried DIRECT'
 fi
 
 reset
