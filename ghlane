@@ -187,38 +187,28 @@ registry_file_valid() {
   [[ -r "$file" ]] || return 1
 
   awk -v max="$REGISTRY_MAX" '
+    NR == 1 { sub(/\r$/, ""); if ($0 != "# ghlane-registry-v1") exit 1; next }
     {
       sub(/\r$/, "")
       if ($0 == "" || $0 ~ /^#/) next
-      if ($0 !~ /^https:\/\/[^[:space:]]+$/) {
-        bad=1
-        next
-      }
+      if ($0 !~ /^https:\/\/[^[:space:]]+$/) exit 1
       if (!seen[$0]++) count++
+      if (count > max) exit 1
     }
-    END {
-      if (bad || count == 0 || count > max) exit 1
-    }
+    END { if (NR == 0) exit 1 }
   ' "$file" >/dev/null
 }
 
 normalize_registry_file() {
   local file="$1"
-  awk -v max="$REGISTRY_MAX" '
+  registry_file_valid "$file" || return 1
+  printf '# ghlane-registry-v1\n'
+  awk '
+    NR == 1 { next }
     {
       sub(/\r$/, "")
       if ($0 == "" || $0 ~ /^#/) next
-      if ($0 !~ /^https:\/\/[^[:space:]]+$/) {
-        bad=1
-        next
-      }
-      if (!seen[$0]++) {
-        count++
-        if (count <= max) print
-      }
-    }
-    END {
-      if (bad || count == 0 || count > max) exit 1
+      if (!seen[$0]++) print
     }
   ' "$file"
 }
@@ -283,7 +273,7 @@ maybe_refresh_registry() {
 
 mirror_source() {
   if registry_file_valid "$CACHE_DIR/registry" 2>/dev/null; then
-    cat "$CACHE_DIR/registry"
+    grep '^https://' "$CACHE_DIR/registry" || true
   elif [[ -r "$MIRROR_FILE" ]]; then
     tr -d '\r' < "$MIRROR_FILE"
   fi
