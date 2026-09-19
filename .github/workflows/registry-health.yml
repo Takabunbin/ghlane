@@ -78,7 +78,6 @@ jobs:
           SOURCE_FILE: /tmp/ghlane-discovery/ghlane-candidates.txt
           STABLE_FILE: mirrors.txt
           PREVIOUS_FILE: registry-v1.txt
-          LEGACY_PREVIOUS_FILE: registry.txt
           OUTPUT_FILE: registry-v1.txt
           LEGACY_OUTPUT_FILE: registry.txt
         run: |
