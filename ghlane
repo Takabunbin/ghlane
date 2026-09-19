@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -11,7 +11,7 @@ MIRROR_FILE="${MIRROR_FILE:-/etc/ghlane/mirrors.txt}"
 BEST_TTL="${BEST_TTL:-3600}"
 SAMPLE_BYTES="${SAMPLE_BYTES:-262143}"
 RACE_TIMEOUT="${RACE_TIMEOUT:-2}"
-REGISTRY_URL="${REGISTRY_URL:-https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt}"
+REGISTRY_URL="${REGISTRY_URL-https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt}"
 REGISTRY_TTL="${REGISTRY_TTL:-86400}"
 REGISTRY_MAX="${REGISTRY_MAX:-8}"
 REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-5}"
