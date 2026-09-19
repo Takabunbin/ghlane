@@ -9,6 +9,8 @@ on:
       - main
     paths:
       - mirrors.txt
+      - sources.json
+      - scripts/discover_mirrors.py
       - scripts/build-registry.sh
       - .github/workflows/registry-health.yml
 
@@ -20,10 +22,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Discover mirror candidates
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/discover_mirrors.py \
+            --sources sources.json \
+            --seed mirrors.txt \
+            --current registry.txt \
+            --output /tmp/ghlane-candidates.txt \
+            --report /tmp/ghlane-discovery.json
+
+          echo
+          echo '=== discovery report ==='
+          cat /tmp/ghlane-discovery.json
+
       - name: Build healthy registry
+        env:
+          SOURCE_FILE: /tmp/ghlane-candidates.txt
         run: |
           chmod +x scripts/build-registry.sh
           scripts/build-registry.sh
+
       - name: Commit registry changes
         run: |
           if git diff --quiet -- registry.txt; then
