@@ -20,14 +20,23 @@ fi
 old_real_curl=""
 old_real_wget=""
 if [[ -r "$CONF" ]]; then
-  # shellcheck disable=SC1090
-  . "$CONF"
-  old_real_curl="${REAL_CURL:-}"
-  old_real_wget="${REAL_WGET:-}"
-fi
+  cp "$CONF" "$tmp/ghlane.conf"
+  sed -i \
+    "s|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt'|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt'|" \
+    "$tmp/ghlane.conf"
 
-if [[ -n "$old_real_curl" && -x "$old_real_curl" && "$old_real_curl" != "$LIBEXEC/ghlane" ]]; then
-  real_curl="$old_real_curl"
+  set_assignment() {
+    local key="$1" value="$2" file="$3"
+    if grep -Eq "^${key}=" "$file"; then
+      sed -i "s|^${key}=.*|${key}='${value//|/\\|}'|" "$file"
+    else
+      printf "%s='%s'\n" "$key" "$value" >>"$file"
+    fi
+  }
+
+  # Preserve user tuning, but repair backend paths if an old backend vanished.
+  set_assignment REAL_CURL "$real_curl" "$tmp/ghlane.conf"
+  set_assignment REAL_WGET "${real_wget:-/usr/bin/wget}" "$tmp/ghlane.conf"
 else
   real_curl=$(PATH=/usr/bin:/bin command -v curl || true)
   [[ -n "$real_curl" ]] || real_curl=$(command -v curl || true)
