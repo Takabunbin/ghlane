@@ -58,6 +58,16 @@ done
 
 printf '%s\t%s\t%s\n' "$$" "$probe" "$target" >>"$FAKE_LOG"
 
+if [[ "$target" == 'https://api.github.com/repos/o/r/releases/tags/v1' ]]; then
+  cat >"$out" <<'JSON'
+{"assets":[
+  {"name":"app.bin","browser_download_url":"https://github.com/o/r/releases/download/v1/app.bin","size":2,"digest":"sha256:565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"},
+  {"name":"file name.bin","browser_download_url":"https://github.com/o/r/releases/download/v1/file%20name.bin","size":2,"digest":"sha256:565339bc4d33d72817b583024112eb7f5cdf3e5eef0252d6ec1b9c9a94e12bb3"}
+]}
+JSON
+  exit 0
+fi
+
 if (( probe )); then
   speed=0
   ctype='application/octet-stream'
@@ -101,6 +111,11 @@ fi
 
 host="${target#https://}"
 host="${host%%/*}"
+
+if [[ "$host" == 'badbin.example' ]]; then
+  [[ -n "$out" && "$out" != /dev/null ]] && printf 'EVIL' >"$out" || printf 'EVIL'
+  exit 0
+fi
 
 if [[ -n "${FINAL_FAIL_HOST:-}" && "$host" == "$FINAL_FAIL_HOST" ]]; then
   if [[ "${FINAL_PARTIAL:-0}" == 1 && -n "$out" ]]; then
@@ -167,6 +182,7 @@ reset() {
   : >"$LOG"
   rm -rf "$TMP/cache"
   mkdir -p "$TMP/cache"
+  rm -f "$TMP/out" "$TMP/a" "$TMP/w" "$TMP/badbin.out" "$TMP/crlf.out"
   write_conf
   unset DIRECT_PROBE_FAIL FINAL_FAIL_HOST FINAL_FAIL_CODE FINAL_PARTIAL
 }
@@ -292,25 +308,18 @@ else
   pass 'future cache timestamp is rejected'
 fi
 
-printf '\n--- D. final-transfer failures ---\n'
+printf '\n--- D. verified failover / final-transfer failures ---\n'
 reset
 printf '%s\n%s\n' 'https://fast.example' 'https://good.example' >"$MIRRORS"
 printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
 FINAL_FAIL_HOST='fast.example'
 FINAL_FAIL_CODE=22
-set +e
 run_curl "$URL" -o "$TMP/final-403" >/dev/null 2>&1
 rc=$?
-set -e
-if [[ $rc -eq 22 && ! -e "$TMP/cache/best" ]]; then
-  pass 'cached mirror HTTP failure clears route cache'
+if [[ $rc -eq 0 && "$(cat "$TMP/final-403")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'mirror HTTP failure retries DIRECT and commits verified file'
 else
-  fail 'cached mirror HTTP failure clears route cache'
-fi
-if [[ $rc -ne 0 ]]; then
-  gap 'same request is not automatically retried on another route'
-else
-  pass 'same-request failover succeeds'
+  fail 'mirror HTTP failure retries DIRECT and commits verified file'
 fi
 
 reset
@@ -318,14 +327,12 @@ printf '%s\n' 'https://fast.example' >"$MIRRORS"
 printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
 FINAL_FAIL_HOST='fast.example'
 FINAL_FAIL_CODE=28
-set +e
 run_curl "$URL" -o "$TMP/final-timeout" >/dev/null 2>&1
 rc=$?
-set -e
-if [[ $rc -eq 28 && ! -e "$TMP/cache/best" ]]; then
-  pass 'final timeout clears route cache'
+if [[ $rc -eq 0 && "$(cat "$TMP/final-timeout")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'mirror timeout safely retries DIRECT'
 else
-  fail 'final timeout clears route cache'
+  fail 'mirror timeout safely retries DIRECT'
 fi
 
 reset
@@ -334,16 +341,13 @@ printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
 FINAL_FAIL_HOST='fast.example'
 FINAL_FAIL_CODE=18
 FINAL_PARTIAL=1
-set +e
 run_curl "$URL" -o "$TMP/partial.out" >/dev/null 2>&1
 rc=$?
-set -e
-if [[ $rc -eq 18 && -s "$TMP/partial.out" && ! -e "$TMP/cache/best" ]]; then
-  pass 'mid-stream failure returns error and clears cache'
+if [[ $rc -eq 0 && "$(cat "$TMP/partial.out")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'partial mirror output is isolated and replaced by verified DIRECT file'
 else
-  fail 'mid-stream failure returns error and clears cache'
+  fail 'partial mirror output is isolated and replaced by verified DIRECT file'
 fi
-gap 'mid-stream transparent failover is unsafe without buffering/resume semantics'
 
 printf '\n--- E. cache/TMP degradation ---\n'
 reset
@@ -390,9 +394,22 @@ arg_test() {
 }
 
 arg_test 'curl --retry preserved' --retry 3 "$URL" -o "$TMP/a"
-arg_test 'curl resume (-C -) preserved' -C - "$URL" -o "$TMP/a"
-arg_test 'curl remote-name (-O) preserved' -O "$URL"
-arg_test 'curl remote-header-name (-OJ) preserved' -OJ "$URL"
+bundled_bypass() {
+  local name="$1"
+  shift
+  reset
+  printf '%s\n' 'https://fast.example' >"$MIRRORS"
+  run_curl "$@" "$URL" -o "$TMP/a" >/dev/null 2>&1 || true
+  probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+  if (( probes == 0 )); then pass "$name"; else fail "$name"; fi
+}
+bundled_bypass 'curl resume (-C -) bypasses acceleration' -C -
+bundled_bypass 'curl range bypasses acceleration' --range 0-10
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+run_curl -O "$URL" >/dev/null 2>&1 || true
+probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if (( probes == 0 )); then pass 'curl remote-name (-O) bypasses acceleration'; else fail 'curl remote-name (-O) bypasses acceleration'; fi
 ENCODED='https://github.com/o/r/releases/download/v1/file%20name.bin'
 arg_test 'percent-encoded Release URL preserved' "$ENCODED" -o "$TMP/a"
 
@@ -402,22 +419,13 @@ out=$(run_curl "$URL" 2>/dev/null)
 if [[ "$out" == 'OK' ]]; then pass 'stdout download remains usable'; else fail 'stdout download remains usable'; fi
 
 printf '\n--- G. bundled short-option safety ---\n'
-bundled_bypass() {
-  local name="$1"
-  shift
-  reset
-  printf '%s\n' 'https://fast.example' >"$MIRRORS"
-  run_curl "$@" "$URL" -o "$TMP/a" >/dev/null 2>&1 || true
-  probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
-  if (( probes == 0 )); then
-    pass "$name"
-  else
-    fail "$name"
-  fi
-}
 bundled_bypass 'bundled curl -u auth bypasses routing' -fsSLuuser:pass
 bundled_bypass 'bundled curl -b cookie bypasses routing' -fsSLbcookie=secret
 bundled_bypass 'bundled curl -k TLS override bypasses routing' -fsSLk
+bundled_bypass 'curl --url-query bypasses routing' --url-query token=secret
+bundled_bypass 'curl referer (-e) bypasses routing' -e 'https://private/?token=secret'
+bundled_bypass 'wget execute (-e) bypasses routing' -e 'header=Authorization: secret'
+bundled_bypass 'unknown future curl option bypasses routing' --future-option value
 
 printf '\n--- H. transport-option semantics ---\n'
 transport_gap() {
@@ -469,10 +477,10 @@ printf '\n--- J. mirror trust / content correctness ---\n'
 reset
 printf '%s\n%s\n' 'https://badbin.example' 'https://good.example' >"$MIRRORS"
 run_curl "$URL" -o "$TMP/badbin.out" >/dev/null 2>&1
-if [[ "$(cached_route)" == 'https://badbin.example' ]]; then
-  gap 'binary-looking wrong content can win; no end-to-end digest validation yet'
+if [[ "$(cat "$TMP/badbin.out" 2>/dev/null)" == 'OK' && "$(cached_route)" != 'https://badbin.example' ]]; then
+  pass 'wrong binary content is rejected by GitHub digest and retried DIRECT'
 else
-  pass 'wrong binary content is rejected'
+  fail 'wrong binary content is rejected by GitHub digest and retried DIRECT'
 fi
 
 reset
@@ -527,16 +535,13 @@ printf '%s\n' 'https://fast.example' >"$MIRRORS"
 printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
 FINAL_FAIL_HOST='fast.example'
 FINAL_FAIL_CODE=8
-set +e
 run_wget "$URL" -O "$TMP/wget-fail" >/dev/null 2>&1
 rc=$?
-set -e
-if [[ $rc -eq 8 && ! -e "$TMP/cache/best" ]]; then
-  pass 'wget failure clears route cache'
+if [[ $rc -eq 0 && "$(cat "$TMP/wget-fail")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'wget mirror failure retries DIRECT and commits verified file'
 else
-  fail 'wget failure clears route cache'
+  fail 'wget mirror failure retries DIRECT and commits verified file'
 fi
-gap 'wget same-request failover is not implemented'
 
 printf '\n========================================\n'
 printf ' summary\n'
