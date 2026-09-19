@@ -359,9 +359,18 @@ select_candidate() {
   printf '%s\n' "$candidate"
 }
 
+is_route_failure() {
+  local tool="$1" status="$2"
+  case "$tool:$status" in
+    curl:5|curl:6|curl:7|curl:16|curl:18|curl:22|curl:28|curl:35|curl:47|curl:52|curl:55|curl:56|curl:60|curl:92|\
+    wget:4|wget:5|wget:8) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 replace_url_and_run() {
-  local real="$1" url="$2" candidate="$3" target status i
-  shift 3
+  local tool="$1" real="$2" url="$3" candidate="$4" target status i
+  shift 4
   local args=("$@")
   target=$(candidate_url "$candidate" "$url")
 
@@ -375,9 +384,12 @@ replace_url_and_run() {
 
   "$real" "${args[@]}"
   status=$?
-  if (( status != 0 )); then
-    rm -f "$CACHE_DIR/best" "$CACHE_DIR/registry.stamp" 2>/dev/null || true
-    [[ "$candidate" == DIRECT ]] || log 'route failed; cache cleared and registry refresh scheduled'
+  if (( status != 0 )) && is_route_failure "$tool" "$status"; then
+    rm -f "$CACHE_DIR/best" 2>/dev/null || true
+    if [[ "$candidate" != DIRECT ]]; then
+      rm -f "$CACHE_DIR/registry.stamp" 2>/dev/null || true
+      log 'route failed; cache cleared and registry refresh scheduled'
+    fi
   fi
   return "$status"
 }
@@ -389,10 +401,10 @@ proxy_tool() {
   [[ "${GHLANE_BYPASS:-0}" == 1 ]] && exec "$real" "$@"
   [[ -x "$real" ]] || { log "$tool backend not found: $real"; return 127; }
   has_implicit_config "$tool" && exec "$real" "$@"
-  should_bypass_args "$@" && exec "$real" "$@"
+  args_are_safe "$tool" "$@" || exec "$real" "$@"
   url=$(find_single_url "$@") || exec "$real" "$@"
   candidate=$(select_candidate "$url")
-  replace_url_and_run "$real" "$url" "$candidate" "$@"
+  replace_url_and_run "$tool" "$real" "$url" "$candidate" "$@"
 }
 
 self_test() {
@@ -402,18 +414,15 @@ self_test() {
   ! is_accelerable_url 'https://raw.githubusercontent.com/o/r/main/install.sh' || return 1
   [[ "$(candidate_url 'https://mirror.example' "$u")" == "https://mirror.example/$u" ]] || return 1
   [[ "$(find_single_url "--url=$u")" == "$u" ]] || return 1
-  should_bypass_args '-H' 'Cookie: session=secret' || return 1
-  should_bypass_args '-u' 'user:pass' || return 1
-  should_bypass_args '-fsSLuuser:pass' || return 1
-  should_bypass_args '-b' 'a=b' || return 1
-  should_bypass_args '-fsSLbcookie=secret' || return 1
-  should_bypass_args '-4' || return 1
-  should_bypass_args '--proxy' 'http://proxy.example' || return 1
-  should_bypass_args '-K' '/tmp/curlrc' || return 1
-  should_bypass_args '-X' 'POST' || return 1
-  should_bypass_args '--data' 'x=1' || return 1
-  should_bypass_args '-T' '/tmp/file' || return 1
-  should_bypass_args '-I' || return 1
+  ! find_single_url "$u" 'https://example.com/other' >/dev/null 2>&1 || return 1
+  args_are_safe curl '-fsSL' '-o' '/tmp/out' "$u" || return 1
+  args_are_safe wget '-q' '-O' '/tmp/out' "$u" || return 1
+  ! args_are_safe curl '-H' 'Cookie: session=secret' "$u" || return 1
+  ! args_are_safe curl '--url-query' 'token=secret' "$u" || return 1
+  ! args_are_safe curl '-e' 'https://private/?token=secret' "$u" || return 1
+  ! args_are_safe wget '-e' 'header=Authorization: secret' "$u" || return 1
+  ! args_are_safe wget '--referer=https://private/?token=secret' "$u" || return 1
+  ! args_are_safe curl '--future-option' "$u" || return 1
   log 'self-test passed'
 }
 
