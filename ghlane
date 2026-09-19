@@ -792,6 +792,10 @@ self_test() {
   ! args_are_safe wget '-e' 'header=Authorization: secret' "$u" || return 1
   ! args_are_safe wget '--referer=https://private/?token=secret' "$u" || return 1
   ! args_are_safe curl '--future-option' "$u" || return 1
+  [[ "$(bounded_uint 0 1 30 2)" == 2 ]] || return 1
+  [[ "$(bounded_uint 08 1 30 2)" == 8 ]] || return 1
+  [[ "$(bounded_uint 999 1 30 2)" == 2 ]] || return 1
+  [[ "$(bounded_uint nope 1 30 2)" == 2 ]] || return 1
 
   testdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane-selftest.XXXXXX") || return 1
   printf '# comment only\n' >"$testdir/curl-empty"
