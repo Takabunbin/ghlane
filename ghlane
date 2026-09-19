@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.10"
+VERSION="0.2.0"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -11,6 +11,10 @@ MIRROR_FILE="${MIRROR_FILE:-/etc/ghlane/mirrors.txt}"
 BEST_TTL="${BEST_TTL:-3600}"
 SAMPLE_BYTES="${SAMPLE_BYTES:-262143}"
 RACE_TIMEOUT="${RACE_TIMEOUT:-2}"
+REGISTRY_URL="${REGISTRY_URL:-https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt}"
+REGISTRY_TTL="${REGISTRY_TTL:-86400}"
+REGISTRY_MAX="${REGISTRY_MAX:-8}"
+REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-5}"
 
 if [[ -n "${GHLANE_CACHE_DIR:-}" ]]; then
   CACHE_DIR="$GHLANE_CACHE_DIR"
@@ -114,8 +118,111 @@ candidate_label() {
   printf '%s' "${label%/}"
 }
 
+registry_file_valid() {
+  local file="$1"
+  [[ -r "$file" ]] || return 1
+
+  awk -v max="$REGISTRY_MAX" '
+    {
+      sub(/\r$/, "")
+      if ($0 == "" || $0 ~ /^#/) next
+      if ($0 !~ /^https:\/\/[^[:space:]]+$/) {
+        bad=1
+        next
+      }
+      if (!seen[$0]++) count++
+    }
+    END {
+      if (bad || count == 0 || count > max) exit 1
+    }
+  ' "$file" >/dev/null
+}
+
+normalize_registry_file() {
+  local file="$1"
+  awk -v max="$REGISTRY_MAX" '
+    {
+      sub(/\r$/, "")
+      if ($0 == "" || $0 ~ /^#/) next
+      if ($0 !~ /^https:\/\/[^[:space:]]+$/) {
+        bad=1
+        next
+      }
+      if (!seen[$0]++) {
+        count++
+        if (count <= max) print
+      }
+    }
+    END {
+      if (bad || count == 0 || count > max) exit 1
+    }
+  ' "$file"
+}
+
+registry_is_fresh() {
+  local stamp="$CACHE_DIR/registry.stamp" ts now age
+  [[ -r "$CACHE_DIR/registry" && -r "$stamp" ]] || return 1
+  registry_file_valid "$CACHE_DIR/registry" || return 1
+  read -r ts < "$stamp" || return 1
+  [[ "$ts" =~ ^[0-9]+$ ]] || return 1
+  now=$(date +%s)
+  age=$((now - ts))
+  (( age >= 0 && age < REGISTRY_TTL ))
+}
+
+refresh_registry() {
+  local raw norm stamp rc
+  [[ "$REGISTRY_URL" == https://* ]] || return 1
+  mkdir -p "$CACHE_DIR" 2>/dev/null || return 1
+
+  raw="$CACHE_DIR/registry.raw.$$"
+  norm="$CACHE_DIR/registry.tmp.$$"
+  stamp="$CACHE_DIR/registry.stamp.tmp.$$"
+  rm -f "$raw" "$norm" "$stamp"
+
+  "$REAL_CURL" -q -fsSL \
+    --connect-timeout 2 \
+    --max-time "$REGISTRY_TIMEOUT" \
+    --max-filesize 4096 \
+    "$REGISTRY_URL" -o "$raw" 2>/dev/null || {
+      rm -f "$raw" "$norm" "$stamp"
+      return 1
+    }
+
+  normalize_registry_file "$raw" > "$norm" || {
+    rm -f "$raw" "$norm" "$stamp"
+    return 1
+  }
+
+  registry_file_valid "$norm" || {
+    rm -f "$raw" "$norm" "$stamp"
+    return 1
+  }
+
+  printf '%s\n' "$(date +%s)" > "$stamp" || {
+    rm -f "$raw" "$norm" "$stamp"
+    return 1
+  }
+
+  mv "$norm" "$CACHE_DIR/registry" &&
+    mv "$stamp" "$CACHE_DIR/registry.stamp"
+  rc=$?
+  rm -f "$raw" "$norm" "$stamp"
+  return "$rc"
+}
+
+maybe_refresh_registry() {
+  [[ -n "$REGISTRY_URL" ]] || return 0
+  registry_is_fresh && return 0
+  refresh_registry || return 0
+}
+
 mirror_source() {
-  [[ -r "$MIRROR_FILE" ]] && tr -d '\r' < "$MIRROR_FILE"
+  if registry_file_valid "$CACHE_DIR/registry" 2>/dev/null; then
+    cat "$CACHE_DIR/registry"
+  elif [[ -r "$MIRROR_FILE" ]]; then
+    tr -d '\r' < "$MIRROR_FILE"
+  fi
 }
 
 cached_candidate() {
@@ -181,6 +288,7 @@ race_candidates() {
 select_candidate() {
   local url="$1" candidate
   candidate=$(cached_candidate 2>/dev/null) && { printf '%s\n' "$candidate"; return; }
+  maybe_refresh_registry
   candidate=$(race_candidates "$url") || candidate="DIRECT"
   save_candidate "$candidate"
   log "selected $(candidate_label "$candidate")"
@@ -204,8 +312,8 @@ replace_url_and_run() {
   "$real" "${args[@]}"
   status=$?
   if (( status != 0 )); then
-    rm -f "$CACHE_DIR/best" 2>/dev/null || true
-    [[ "$candidate" == DIRECT ]] || log 'route failed; cache cleared for next attempt'
+    rm -f "$CACHE_DIR/best" "$CACHE_DIR/registry.stamp" 2>/dev/null || true
+    [[ "$candidate" == DIRECT ]] || log 'route failed; cache cleared and registry refresh scheduled'
   fi
   return "$status"
 }
@@ -251,11 +359,28 @@ cli() {
     --version|-V|version) printf 'ghlane %s\n' "$VERSION" ;;
     self-test) self_test ;;
     mirrors) printf 'DIRECT\n'; mirror_source ;;
+    refresh)
+      if refresh_registry; then
+        rm -f "$CACHE_DIR/best" 2>/dev/null || true
+        printf 'registry refreshed\n'
+      else
+        log 'registry refresh failed; existing mirrors kept'
+        return 1
+      fi
+      ;;
     status)
       printf 'ghlane %s\n' "$VERSION"
       printf 'curl: %s\n' "$REAL_CURL"
       printf 'wget: %s\n' "$REAL_WGET"
-      printf 'mirrors: %s\n' "$MIRROR_FILE"
+      printf 'mirrors fallback: %s\n' "$MIRROR_FILE"
+      printf 'registry: %s\n' "${REGISTRY_URL:-disabled}"
+      if registry_is_fresh 2>/dev/null; then
+        printf 'registry cache: fresh\n'
+      elif registry_file_valid "$CACHE_DIR/registry" 2>/dev/null; then
+        printf 'registry cache: stale\n'
+      else
+        printf 'registry cache: none\n'
+      fi
       if candidate=$(cached_candidate 2>/dev/null); then
         printf 'cached route: %s\n' "$(candidate_label "$candidate")"
       else
@@ -263,7 +388,7 @@ cli() {
       fi
       ;;
     *)
-      printf 'Usage: ghlane {status|mirrors|self-test|version}\n' >&2
+      printf 'Usage: ghlane {status|mirrors|refresh|self-test|version}\n' >&2
       return 2
       ;;
   esac

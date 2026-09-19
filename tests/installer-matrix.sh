@@ -53,7 +53,7 @@ case_missing_wget() {
   reset_system
   apt-get purge -y wget >/dev/null 2>&1 || true
   run_install >/dev/null
-  test "$(ghlane version)" = "ghlane 0.1.10"
+  test "$(ghlane version)" = "ghlane 0.2.0"
   test "$(readlink -f /usr/local/bin/curl)" = "/usr/local/libexec/ghlane"
   test ! -e /usr/local/bin/wget
 }
@@ -61,7 +61,7 @@ case_missing_wget() {
 case_fresh() {
   reset_system
   run_install >/dev/null
-  test "$(ghlane version)" = "ghlane 0.1.10"
+  test "$(ghlane version)" = "ghlane 0.2.0"
   test "$(readlink -f /usr/local/bin/curl)" = "/usr/local/libexec/ghlane"
   test "$(readlink -f /usr/local/bin/wget)" = "/usr/local/libexec/ghlane"
   test "$(readlink -f /usr/local/bin/ghlane)" = "/usr/local/libexec/ghlane"
@@ -90,7 +90,7 @@ case_custom_curl() {
   run_install >/dev/null 2>&1
   test "$before" = "$(sha256sum /usr/local/bin/curl)"
   test ! -L /usr/local/bin/curl
-  test "$(ghlane version)" = "ghlane 0.1.10"
+  test "$(ghlane version)" = "ghlane 0.2.0"
 }
 
 case_custom_wget() {
@@ -103,7 +103,7 @@ case_custom_wget() {
   run_install >/dev/null 2>&1
   test "$before" = "$(sha256sum /usr/local/bin/wget)"
   test ! -L /usr/local/bin/wget
-  test "$(ghlane version)" = "ghlane 0.1.10"
+  test "$(ghlane version)" = "ghlane 0.2.0"
 }
 
 case_bad_upgrade() {
@@ -176,7 +176,7 @@ case_reinstall_after_uninstall() {
   run_install >/dev/null
   run_uninstall >/dev/null
   run_install >/dev/null
-  test "$(ghlane version)" = "ghlane 0.1.10"
+  test "$(ghlane version)" = "ghlane 0.2.0"
   ghlane self-test >/dev/null
 }
 
@@ -187,7 +187,7 @@ case_nonroot_sudo() {
   chmod 0440 /etc/sudoers.d/ghlane-test
 
   sudo -u ghlane-test -H env PATH=/usr/local/bin:/usr/bin:/bin bash "$TMP/install.sh" >/dev/null
-  test "$(ghlane version)" = "ghlane 0.1.10"
+  test "$(ghlane version)" = "ghlane 0.2.0"
   ghlane self-test >/dev/null
 
   sudo -u ghlane-test -H env PATH=/usr/local/bin:/usr/bin:/bin bash "$TMP/uninstall.sh" >/dev/null
