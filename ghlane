@@ -498,8 +498,8 @@ file_matches_digest() {
 }
 
 run_candidate_to_file() {
-  local real="$1" url="$2" candidate="$3" out="$4" target arg i
-  shift 4
+  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" target arg i
+  shift 5
   local args=("$@")
   target=$(candidate_url "$candidate" "$url")
 
@@ -509,17 +509,17 @@ run_candidate_to_file() {
       args[$i]="$target"
     elif [[ "$arg" == "--url=$url" ]]; then
       args[$i]="--url=$target"
-    elif [[ "$arg" == -o || "$arg" == --output || "$arg" == -O || "$arg" == --output-document ]]; then
-      if (( i + 1 < ${#args[@]} )); then
-        args[$((i + 1))]="$out"
-      fi
-    elif [[ "$arg" == --output=* ]]; then
+    elif [[ "$tool" == curl && ( "$arg" == -o || "$arg" == --output ) ]]; then
+      (( i + 1 < ${#args[@]} )) && args[$((i + 1))]="$out"
+    elif [[ "$tool" == wget && ( "$arg" == -O || "$arg" == --output-document ) ]]; then
+      (( i + 1 < ${#args[@]} )) && args[$((i + 1))]="$out"
+    elif [[ "$tool" == curl && "$arg" == --output=* ]]; then
       args[$i]="--output=$out"
-    elif [[ "$arg" == --output-document=* ]]; then
+    elif [[ "$tool" == wget && "$arg" == --output-document=* ]]; then
       args[$i]="--output-document=$out"
-    elif [[ "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
+    elif [[ "$tool" == curl && "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
       args[$i]="${BASH_REMATCH[1]}$out"
-    elif [[ "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
+    elif [[ "$tool" == wget && "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
       args[$i]="${BASH_REMATCH[1]}$out"
     fi
   done
@@ -530,7 +530,7 @@ run_candidate_to_file() {
 verified_transfer() {
   local tool="$1" real="$2" url="$3" candidate="$4" out="$5" digest="$6" size="$7"
   shift 7
-  local dir base tmp mode status=0
+  local dir base tmp mode status
 
   dir=$(dirname -- "$out")
   base=$(basename -- "$out")
@@ -538,12 +538,12 @@ verified_transfer() {
   mode=$(printf '%03o' "$(( 0666 & ~$(umask) ))")
   chmod "$mode" "$tmp" 2>/dev/null || true
 
-  if run_candidate_to_file "$real" "$url" "$candidate" "$tmp" "$@" && file_matches_digest "$tmp" "$digest" "$size"; then
+  run_candidate_to_file "$tool" "$real" "$url" "$candidate" "$tmp" "$@"
+  status=$?
+  if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
     mv -f -- "$tmp" "$out"
     return $?
   fi
-
-  status=$?
   rm -f "$tmp"
 
   if [[ "$candidate" != DIRECT ]]; then
@@ -551,11 +551,12 @@ verified_transfer() {
     log 'mirror transfer failed verification; retrying direct'
     tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
     chmod "$mode" "$tmp" 2>/dev/null || true
-    if run_candidate_to_file "$real" "$url" DIRECT "$tmp" "$@" && file_matches_digest "$tmp" "$digest" "$size"; then
+    run_candidate_to_file "$tool" "$real" "$url" DIRECT "$tmp" "$@"
+    status=$?
+    if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
       mv -f -- "$tmp" "$out"
       return $?
     fi
-    status=$?
     rm -f "$tmp"
   fi
 
