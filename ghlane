@@ -133,6 +133,7 @@ config_has_sensitive_directive() {
 
 has_implicit_config() {
   local tool="$1"
+  [[ -n "${HOME:-}" && -f "$HOME/.netrc" ]] && return 0
   case "$tool" in
     curl)
       [[ -n "${CURL_HOME:-}" && -f "$CURL_HOME/.curlrc" ]] && return 0
