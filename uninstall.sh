@@ -42,7 +42,7 @@ fi
 
 if [[ -n "$cache" ]]; then
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    root_home=$(getent passwd 0 2>/dev/null | awk -F: 'NR==1 {print $6}')
+    root_home=$(getent passwd 0 2>/dev/null | awk -F: 'NR==1 {print $6}' || true)
     if [[ -n "$root_home" && "$cache" == "$root_home"/* ]]; then
       rm -rf -- "$cache"
     else
