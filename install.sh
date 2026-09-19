@@ -76,6 +76,7 @@ REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt
 REGISTRY_TTL='86400'
 REGISTRY_MAX='8'
 REGISTRY_TIMEOUT='5'
+DIGEST_TTL='86400'
 CONF
 fi
 
