@@ -55,12 +55,9 @@ cache_dir_safe() {
 }
 
 if ! cache_dir_safe "$CACHE_DIR"; then
-  private_cache=$( (umask 077; mktemp -d "${TMPDIR:-/tmp}/ghlane-cache.${UID:-0}.XXXXXX") 2>/dev/null || true )
-  if [[ -n "$private_cache" ]] && cache_dir_safe "$private_cache"; then
-    CACHE_DIR="$private_cache"
-  else
-    CACHE_DIR="/dev/null/ghlane"
-  fi
+  # Unsafe cache state is never required for correctness. Disable acceleration
+  # state instead of creating persistent fallback state in a shared directory.
+  CACHE_DIR="/dev/null/ghlane"
 fi
 
 log() { printf '[ghlane] %s\n' "$*" >&2; }
