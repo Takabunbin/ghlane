@@ -757,6 +757,15 @@ self_test() {
   system_config_requires_bypass curl "$testdir/curl-active" || { rm -rf "$testdir"; return 1; }
   system_config_requires_bypass wget "$testdir/wget-stock" && { rm -rf "$testdir"; return 1; }
   system_config_requires_bypass wget "$testdir/wget-active" || { rm -rf "$testdir"; return 1; }
+
+  printf 'verified' >"$testdir/src"
+  printf 'existing' >"$testdir/dst"
+  commit_verified_file "$testdir/src" "$testdir/dst" && { rm -rf "$testdir"; return 1; }
+  [[ "$(cat "$testdir/dst")" == existing && "$(cat "$testdir/src")" == verified ]] || { rm -rf "$testdir"; return 1; }
+  rm -f "$testdir/dst"
+  commit_verified_file "$testdir/src" "$testdir/dst" || { rm -rf "$testdir"; return 1; }
+  [[ "$(cat "$testdir/dst")" == verified && ! -e "$testdir/src" ]] || { rm -rf "$testdir"; return 1; }
+
   rm -rf "$testdir"
 
   log 'self-test passed'
