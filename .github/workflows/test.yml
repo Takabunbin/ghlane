@@ -12,6 +12,7 @@ jobs:
       - run: |
           bash -n ghlane
           bash -n install.sh
+          bash -n uninstall.sh
           bash -n tests/fault-injection.sh
           bash -n tests/installer-matrix.sh
           chmod +x ghlane tests/fault-injection.sh tests/installer-matrix.sh
@@ -21,11 +22,25 @@ jobs:
 
   installer:
     runs-on: ubuntu-latest
-    container: debian:13-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:12-slim
+            label: debian-12
+          - image: debian:13-slim
+            label: debian-13
+          - image: ubuntu:24.04
+            label: ubuntu-24.04
+          - image: ubuntu:26.04
+            label: ubuntu-26.04
+    name: installer (${{ matrix.label }})
+    container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
       - run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates sudo >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates sudo passwd >/dev/null
+          bash -n uninstall.sh
           bash -n tests/installer-matrix.sh
           bash tests/installer-matrix.sh
