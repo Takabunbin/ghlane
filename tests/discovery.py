@@ -140,16 +140,18 @@ with tempfile.TemporaryDirectory() as td:
     got = output.read_text(encoding="utf-8").splitlines()
     assert got == [
         "https://seed.example",
+        "https://incumbent.example",
         "https://optin.example",
         "https://consensus.example",
     ]
     data = json.loads(report.read_text(encoding="utf-8"))
-    assert data["candidate_count"] == 3
+    assert data["candidate_count"] == 4
     assert data["denylist_count"] == 1
-    assert "https://incumbent.example" not in got
-    incumbent = next(c for c in data["candidates"] if c["url"] == "https://seed.example")
-    assert incumbent["provenance"][0]["trust"] == "first_party"
-    ok("incumbent registry is not promoted to first-party trust")
+    seed_entry = next(c for c in data["candidates"] if c["url"] == "https://seed.example")
+    assert seed_entry["provenance"][0]["trust"] == "first_party"
+    incumbent = next(c for c in data["candidates"] if c["url"] == "https://incumbent.example")
+    assert incumbent["provenance"][0]["trust"] == "incumbent"
+    ok("incumbent registry remains a candidate without first-party trust elevation")
 
 with tempfile.TemporaryDirectory() as td:
     td = Path(td)
