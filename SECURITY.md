@@ -30,10 +30,9 @@ An accelerated transfer is attempted only when all of the following hold:
    asset.
 5. The complete downloaded file matches both that size and SHA-256 digest.
 
-By default, expected digest metadata is fetched fresh for each accelerated
-transfer (`DIGEST_TTL=0`) so a replaced Release asset cannot be silently
-served from an old local digest cache. Operators may explicitly opt into a
-non-zero metadata TTL as a performance/reliability tradeoff.
+Expected digest metadata is fetched fresh from GitHub for each accelerated
+transfer. ghlane intentionally does not cache integrity metadata, avoiding a
+stale-digest replay window when a Release asset is replaced.
 
 Mirror output is first written to a temporary file beside the requested
 destination. It is moved into place only after verification. A mirror transfer
