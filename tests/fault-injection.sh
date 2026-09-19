@@ -349,6 +349,21 @@ else
   fail 'partial mirror output is isolated and replaced by verified DIRECT file'
 fi
 
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
+FINAL_FAIL_HOST='fast.example'
+FINAL_FAIL_CODE=23
+set +e
+run_curl "$URL" -o "$TMP/local-write-fail" >/dev/null 2>&1
+rc=$?
+set -e
+if [[ $rc -eq 23 && "$(cached_route)" == 'https://fast.example' ]]; then
+  pass 'local curl write failure does not evict a healthy route'
+else
+  fail 'local curl write failure does not evict a healthy route'
+fi
+
 printf '\n--- E. cache/TMP degradation ---\n'
 reset
 printf '%s\n' 'https://good.example' >"$MIRRORS"
