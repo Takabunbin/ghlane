@@ -3,8 +3,22 @@ set -uo pipefail
 
 VERSION="0.2.1"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
-# shellcheck disable=SC1090
-[[ -r "$CONFIG" ]] && . "$CONFIG"
+
+if [[ -r "$CONFIG" ]]; then
+  source_config=1
+  if [[ "$CONFIG" == /etc/ghlane.conf ]]; then
+    owner=$(stat -c '%u' "$CONFIG" 2>/dev/null || printf 'unsafe')
+    mode=$(stat -c '%a' "$CONFIG" 2>/dev/null || printf '777')
+    if [[ "$owner" != 0 || ! "$mode" =~ ^[0-7]+$ ]] || (( (8#$mode & 022) != 0 )); then
+      printf '[ghlane] refusing unsafe system config: %s\n' "$CONFIG" >&2
+      source_config=0
+    fi
+  fi
+  if (( source_config )); then
+    # shellcheck disable=SC1090
+    . "$CONFIG"
+  fi
+fi
 
 REAL_CURL="${REAL_CURL:-/usr/bin/curl}"
 REAL_WGET="${REAL_WGET:-/usr/bin/wget}"
