@@ -41,7 +41,7 @@ REF_SHA=$(sha256sum "$REF" | awk '{print $1}')
 
 while IFS= read -r mirror || [[ -n "$mirror" ]]; do
   mirror="${mirror//$'\r'/}"
-  [[ -z "$mirror" || "$mirror" == #* ]] && continue
+  [[ -z "$mirror" || "$mirror" == \#* ]] && continue
 
   if [[ "$mirror" != https://* || "$mirror" == *[[:space:]]* ]]; then
     echo "SKIP  $mirror  invalid"
