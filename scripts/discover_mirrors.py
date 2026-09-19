@@ -77,6 +77,8 @@ def strip_quotes_and_code(text: str) -> str:
             continue
         if fenced or line.lstrip().startswith(">"):
             continue
+        # Markdown strike-through commonly marks retired mirrors in source issues.
+        line = re.sub(r"~~.*?~~", "", line)
         kept.append(line)
     return "\n".join(kept)
 
@@ -186,18 +188,22 @@ def main() -> int:
     parser.add_argument("--current", default="registry.txt")
     parser.add_argument("--output", required=True)
     parser.add_argument("--report")
+    parser.add_argument("--denylist", default="denylist.txt")
     parser.add_argument("--hint-quorum", type=int, default=2)
     parser.add_argument("--max-candidates", type=int, default=128)
     args = parser.parse_args()
 
     source_defs = json.loads(Path(args.sources).read_text(encoding="utf-8"))
     token = os.environ.get("GITHUB_TOKEN")
+    denied = set(read_urls_file(Path(args.denylist)))
     accepted: OrderedDict[str, None] = OrderedDict()
     provenance: dict[str, list[dict]] = defaultdict(list)
     hint_sources: dict[str, set[str]] = defaultdict(set)
     source_results: list[dict] = []
 
     def accept(url: str, source: str, trust: str) -> None:
+        if url in denied:
+            return
         accepted.setdefault(url, None)
         provenance[url].append({"source": source, "trust": trust})
 
@@ -218,6 +224,8 @@ def main() -> int:
             source_results.append({"name": name, "trust": trust, "count": 0, "ok": False})
             continue
         for url in urls:
+            if url in denied:
+                continue
             provenance[url].append({"source": name, "trust": trust})
             if trust == "optin":
                 accepted.setdefault(url, None)
@@ -227,7 +235,7 @@ def main() -> int:
                 print(f"WARN  unknown trust '{trust}' for {name}", file=sys.stderr)
 
     for url, names in sorted(hint_sources.items()):
-        if len(names) >= args.hint_quorum:
+        if url not in denied and len(names) >= args.hint_quorum:
             accepted.setdefault(url, None)
 
     candidates = list(accepted)
@@ -243,6 +251,7 @@ def main() -> int:
     output.write_text("".join(f"{url}\n" for url in candidates), encoding="utf-8")
     report = {
         "candidate_count": len(candidates),
+        "denylist_count": len(denied),
         "hint_quorum": args.hint_quorum,
         "candidates": [
             {"url": url, "provenance": provenance.get(url, [])}
@@ -260,6 +269,7 @@ def main() -> int:
     for result in source_results:
         state = "OK" if result["ok"] else "FAIL"
         print(f"{state:4}  {result['name']}: {result['count']}")
+    print(f"denylisted endpoints: {len(denied)}")
     print(f"accepted candidates: {len(candidates)}")
     for url in candidates:
         print(f"CAND  {url}")
