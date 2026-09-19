@@ -93,7 +93,6 @@ if CURL_BIN="$TMP/fake-curl" \
    SOURCE_FILE="$TMP/source.txt" \
    STABLE_FILE="$TMP/stable.txt" \
    PREVIOUS_FILE="$TMP/previous-v1.txt" \
-   LEGACY_PREVIOUS_FILE="$TMP/previous-legacy.txt" \
    OUTPUT_FILE="$TMP/registry-v1.txt" \
    LEGACY_OUTPUT_FILE="$TMP/registry.txt" \
    MAX_MIRRORS=5 \
@@ -107,14 +106,14 @@ then
      grep -Eq '^https://good[2345]\.example$' "$TMP/registry-v1.txt" &&
      ! grep -Fxq 'https://bad.example' "$TMP/registry-v1.txt" &&
      [[ "$v1_count" -eq 5 ]] &&
-     [[ "$(cat "$TMP/registry.txt")" == $'https://good1.example\nhttps://dead.example' ]]
+     [[ "$(cat "$TMP/registry.txt")" == 'https://github.com' ]]
   then
-    pass 'v1 admits verified discoveries while legacy stays manual-only'
+    pass 'v1 admits verified discoveries while legacy is forced DIRECT-only'
   else
-    fail 'v1 admits verified discoveries while legacy stays manual-only'
+    fail 'v1 admits verified discoveries while legacy is forced DIRECT-only'
   fi
 else
-  fail 'v1 admits verified discoveries while legacy stays manual-only'
+  fail 'v1 admits verified discoveries while legacy is forced DIRECT-only'
 fi
 
 printf '%s\n' 'https://newdead.example' >"$TMP/newdead-source.txt"
@@ -126,16 +125,15 @@ if CURL_BIN="$TMP/fake-curl" \
    SOURCE_FILE="$TMP/newdead-source.txt" \
    STABLE_FILE="$TMP/no-stable.txt" \
    PREVIOUS_FILE="$TMP/empty-v1.txt" \
-   LEGACY_PREVIOUS_FILE="$TMP/empty-legacy.txt" \
    OUTPUT_FILE="$TMP/newdead-v1.txt" \
    LEGACY_OUTPUT_FILE="$TMP/newdead-legacy.txt" \
    bash "$BUILDER" >/dev/null 2>&1 &&
    [[ "$(cat "$TMP/newdead-v1.txt")" == '# ghlane-registry-v1' ]] &&
-   [[ ! -s "$TMP/newdead-legacy.txt" ]]
+   [[ "$(cat "$TMP/newdead-legacy.txt")" == 'https://github.com' ]]
 then
-  pass 'new runner-unreachable discovery is not promoted'
+  pass 'new runner-unreachable discovery is not promoted and legacy stays DIRECT-only'
 else
-  fail 'new runner-unreachable discovery is not promoted'
+  fail 'new runner-unreachable discovery is not promoted and legacy stays DIRECT-only'
 fi
 
 printf 'https://bad.example\n' >"$TMP/bad-source.txt"
@@ -147,16 +145,15 @@ if CURL_BIN="$TMP/fake-curl" \
    SOURCE_FILE="$TMP/bad-source.txt" \
    STABLE_FILE="$TMP/bad-stable.txt" \
    PREVIOUS_FILE="$TMP/bad-previous-v1.txt" \
-   LEGACY_PREVIOUS_FILE="$TMP/bad-previous-legacy.txt" \
    OUTPUT_FILE="$TMP/bad-v1.txt" \
    LEGACY_OUTPUT_FILE="$TMP/bad-legacy.txt" \
    bash "$BUILDER" >/dev/null 2>&1 &&
    [[ "$(cat "$TMP/bad-v1.txt")" == '# ghlane-registry-v1' ]] &&
-   [[ ! -s "$TMP/bad-legacy.txt" ]]
+   [[ "$(cat "$TMP/bad-legacy.txt")" == 'https://github.com' ]]
 then
-  pass 'content mismatch is hard-rejected from both registries'
+  pass 'content mismatch is hard-rejected from v1 and legacy stays DIRECT-only'
 else
-  fail 'content mismatch is hard-rejected from both registries'
+  fail 'content mismatch is hard-rejected from v1 and legacy stays DIRECT-only'
 fi
 
 printf '%s\n' 'https://good1.example' 'https://good2.example' >"$TMP/cap-source.txt"
@@ -166,18 +163,17 @@ if CURL_BIN="$TMP/fake-curl" \
    SOURCE_FILE="$TMP/cap-source.txt" \
    STABLE_FILE="$TMP/cap-stable.txt" \
    PREVIOUS_FILE="$TMP/empty-v1.txt" \
-   LEGACY_PREVIOUS_FILE="$TMP/empty-legacy.txt" \
    OUTPUT_FILE="$TMP/capped-v1.txt" \
    LEGACY_OUTPUT_FILE="$TMP/capped-legacy.txt" \
    MAX_MIRRORS=1 \
    STABLE_SLOTS=1 \
    bash "$BUILDER" >/dev/null 2>&1 &&
    [[ "$(grep -c '^https://' "$TMP/capped-v1.txt")" -eq 1 ]] &&
-   [[ "$(cat "$TMP/capped-legacy.txt")" == 'https://good1.example' ]]
+   [[ "$(cat "$TMP/capped-legacy.txt")" == 'https://github.com' ]]
 then
-  pass 'v1 and legacy publication caps are enforced'
+  pass 'v1 cap is enforced and legacy remains DIRECT-only'
 else
-  fail 'v1 and legacy publication caps are enforced'
+  fail 'v1 cap is enforced and legacy remains DIRECT-only'
 fi
 
 printf '========================================\n'
