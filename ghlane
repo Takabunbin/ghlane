@@ -710,7 +710,7 @@ proxy_tool() {
 }
 
 self_test() {
-  local u='https://github.com/o/r/releases/download/v1/app'
+  local u='https://github.com/o/r/releases/download/v1/app' testdir
   is_accelerable_url "$u" || return 1
   ! is_accelerable_url 'https://api.github.com/repos/o/r' || return 1
   ! is_accelerable_url 'https://raw.githubusercontent.com/o/r/main/install.sh' || return 1
@@ -725,6 +725,18 @@ self_test() {
   ! args_are_safe wget '-e' 'header=Authorization: secret' "$u" || return 1
   ! args_are_safe wget '--referer=https://private/?token=secret' "$u" || return 1
   ! args_are_safe curl '--future-option' "$u" || return 1
+
+  testdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane-selftest.XXXXXX") || return 1
+  printf '# comment only\n' >"$testdir/curl-empty"
+  printf '%s\n' '-H = "Authorization: Bearer secret"' >"$testdir/curl-active"
+  printf '%s\n' 'passive_ftp = on' >"$testdir/wget-stock"
+  printf '%s\n' 'HTTP-Password = secret' >"$testdir/wget-active"
+  system_config_requires_bypass curl "$testdir/curl-empty" && { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass curl "$testdir/curl-active" || { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass wget "$testdir/wget-stock" && { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass wget "$testdir/wget-active" || { rm -rf "$testdir"; return 1; }
+  rm -rf "$testdir"
+
   log 'self-test passed'
 }
 
