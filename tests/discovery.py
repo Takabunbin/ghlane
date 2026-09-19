@@ -26,7 +26,11 @@ assert mod.canonicalize("https://GH.Example/") == "https://gh.example"
 assert mod.canonicalize("https://user:TOKEN@ghproxy.com") is None
 assert mod.canonicalize("http://gh.example") is None
 assert mod.canonicalize("https://github.com/a/b") is None
-ok("URL canonicalization rejects credentials, non-HTTPS and GitHub originals")
+assert mod.canonicalize("https://localhost") is None
+assert mod.canonicalize("https://127.0.0.1") is None
+assert mod.canonicalize("https://169.254.169.254") is None
+assert mod.canonicalize("https://[::1]") is None
+ok("URL canonicalization rejects credentials, non-HTTPS, GitHub originals and local endpoints")
 
 post = """
 Thanks:
