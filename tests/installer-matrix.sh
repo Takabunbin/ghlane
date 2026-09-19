@@ -246,6 +246,25 @@ case_interrupted_upgrade_keeps_old_core_working() {
   ghlane self-test >/dev/null
 }
 
+case_interrupted_upgrade_after_core_switch_keeps_old_config_compatible() {
+  reset_system
+  run_install >/dev/null
+
+  sed -i "s|registry-v1.txt|registry.txt|" /etc/ghlane.conf
+  local interrupted
+  interrupted="$TMP/interrupted-after-core.sh"
+  cp "$TMP/install.sh" "$interrupted"
+  sed -i '/mv -f "\$conf_new" "\$CONF"/i\false' "$interrupted"
+
+  if bash "$interrupted" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  test "$(ghlane version)" = "ghlane 0.2.1"
+  grep -Fxq "REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt'" /etc/ghlane.conf
+  ghlane self-test >/dev/null
+}
+
 case_unsafe_system_config_rejected() {
   reset_system
   run_install >/dev/null
@@ -307,6 +326,7 @@ run_case 'reinstall repairs vanished backend paths' case_repair_missing_backend_
 run_case 'old default registry URL migrates to registry-v1' case_migrate_default_registry_url
 run_case 'unsafe system config is rejected before sourcing' case_unsafe_system_config_rejected
 run_case 'interrupted upgrade before core switch keeps old core working' case_interrupted_upgrade_keeps_old_core_working
+run_case 'interrupted upgrade after core switch keeps old config compatible' case_interrupted_upgrade_after_core_switch_keeps_old_config_compatible
 run_case 'safe uninstall removes only ghlane files' case_uninstall
 run_case 'repeat uninstall is idempotent' case_uninstall_idempotent
 run_case 'custom curl/wget survive uninstall' case_custom_survives_uninstall
