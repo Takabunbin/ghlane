@@ -43,10 +43,11 @@ fi
 if [[ -n "$cache" ]]; then
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     root_home=$(getent passwd 0 2>/dev/null | awk -F: 'NR==1 {print $6}')
-    case "$cache" in
-      "$root_home"/*) rm -rf -- "$cache" ;;
-      *) echo "ghlane: leaving cache outside root home untouched: $cache" >&2 ;;
-    esac
+    if [[ -n "$root_home" && "$cache" == "$root_home"/* ]]; then
+      rm -rf -- "$cache"
+    else
+      echo "ghlane: leaving cache outside root home untouched: $cache" >&2
+    fi
   else
     rm -rf -- "$cache"
   fi
