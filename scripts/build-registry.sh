@@ -72,16 +72,8 @@ if (( ${#CANDIDATES[@]} > MAX_CANDIDATES )); then
   echo "registry-health: candidate list truncated to $MAX_CANDIDATES endpoints" >&2
 fi
 
-declare -A STABLE=()
 declare -A PREVIOUS=()
 
-if [[ -r "$STABLE_FILE" ]]; then
-  while IFS= read -r mirror || [[ -n "$mirror" ]]; do
-    mirror="${mirror//$'\r'/}"
-    [[ "$mirror" == https://* ]] || continue
-    STABLE["$mirror"]=1
-  done <"$STABLE_FILE"
-fi
 
 if [[ -r "$PREVIOUS_FILE" ]]; then
   while IFS= read -r mirror || [[ -n "$mirror" ]]; do
