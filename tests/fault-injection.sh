@@ -405,6 +405,19 @@ rc=$?
 set -e
 if [[ $rc -eq 0 ]]; then pass 'HOME/XDG cache variables may be absent'; else fail 'HOME/XDG cache variables may be absent'; fi
 
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+mkdir -p "$TMP/attacker-cache"
+chmod 0777 "$TMP/attacker-cache"
+env GHLANE_CONFIG="$CONF" GHLANE_CACHE_DIR="$TMP/attacker-cache" FAKE_LOG="$LOG" \
+  "$TMP/bin/curl" "$URL" -o "$TMP/unsafe-cache.out" >/dev/null 2>&1
+if [[ "$(cat "$TMP/unsafe-cache.out" 2>/dev/null)" == 'OK' &&
+      -z "$(find "$TMP/attacker-cache" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  pass 'writable shared cache directory is not trusted'
+else
+  fail 'writable shared cache directory is not trusted'
+fi
+
 printf '\n--- F. argument preservation ---\n'
 arg_test() {
   local name="$1"
