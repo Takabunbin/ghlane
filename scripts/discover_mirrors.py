@@ -238,7 +238,7 @@ def main() -> int:
 
     incumbent_urls = read_urls_file(Path(args.current))
     for url in incumbent_urls:
-        provenance[url].append({"source": "current registry", "trust": "incumbent"})
+        accept(url, "current registry", "incumbent")
     source_results.append({"name": "current registry", "trust": "incumbent", "count": len(incumbent_urls), "ok": True})
 
     for source in source_defs:
