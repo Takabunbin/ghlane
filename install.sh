@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="Takabunbin/ghlane"
 REF="${GHLANE_REF:-main}"
-BASE="https://cdn.jsdelivr.net/gh/${REPO}@${REF}"
+BASE="${GHLANE_BASE:-https://cdn.jsdelivr.net/gh/${REPO}@${REF}}"
 PREFIX="/usr/local"
 LIBEXEC="$PREFIX/libexec"
 BIN="$PREFIX/bin"
@@ -46,26 +46,61 @@ real_curl=$(readlink -f "$real_curl")
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-"$real_curl" -fsSL --connect-timeout 5 --max-time 30 "$BASE/ghlane" -o "$tmp/ghlane"
-"$real_curl" -fsSL --connect-timeout 5 --max-time 30 "$BASE/mirrors.txt" -o "$tmp/mirrors.txt"
+"$real_curl" -q -fsSL --connect-timeout 5 --max-time 30 "$BASE/ghlane" -o "$tmp/ghlane"
+"$real_curl" -q -fsSL --connect-timeout 5 --max-time 30 "$BASE/mirrors.txt" -o "$tmp/mirrors.txt"
+
 bash -n "$tmp/ghlane"
-grep -q '^https://' "$tmp/mirrors.txt"
+awk '
+  {
+    sub(/\r$/, "")
+    if ($0 == "" || $0 ~ /^#/) next
+    if ($0 !~ /^https:\/\/[^[:space:]]+$/) exit 1
+    count++
+  }
+  END { if (count == 0) exit 1 }
+' "$tmp/mirrors.txt"
 
-"${SUDO[@]}" mkdir -p "$LIBEXEC" "$BIN" "$ETC"
-"${SUDO[@]}" install -m 0755 "$tmp/ghlane" "$LIBEXEC/ghlane"
-"${SUDO[@]}" install -m 0644 "$tmp/mirrors.txt" "$ETC/mirrors.txt"
-
-cat > "$tmp/ghlane.conf" <<CONF
+if [[ -r "$CONF" ]]; then
+  cp "$CONF" "$tmp/ghlane.conf"
+  sed -i \
+    "s|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt'|REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt'|" \
+    "$tmp/ghlane.conf"
+else
+  cat >"$tmp/ghlane.conf" <<CONF
 REAL_CURL='$real_curl'
 REAL_WGET='${real_wget:-/usr/bin/wget}'
 MIRROR_FILE='$ETC/mirrors.txt'
 BEST_TTL='3600'
-REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt'
+REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt'
 REGISTRY_TTL='86400'
 REGISTRY_MAX='8'
 REGISTRY_TIMEOUT='5'
 CONF
-"${SUDO[@]}" install -m 0644 "$tmp/ghlane.conf" "$CONF"
+fi
+
+"${SUDO[@]}" mkdir -p "$LIBEXEC" "$BIN" "$ETC"
+
+# Each replacement is atomic within its target filesystem. Mirrors/config go
+# first because both old and new cores can safely consume them; the executable
+# is switched last, avoiding a half-upgraded core/config pair.
+core_new="$LIBEXEC/.ghlane.new.$$"
+mirrors_new="$ETC/.mirrors.new.$$"
+conf_new="/etc/.ghlane.conf.new.$$"
+
+cleanup_targets() {
+  "${SUDO[@]}" rm -f "$core_new" "$mirrors_new" "$conf_new" 2>/dev/null || true
+}
+trap 'cleanup_targets; rm -rf "$tmp"' EXIT
+
+"${SUDO[@]}" install -m 0644 "$tmp/mirrors.txt" "$mirrors_new"
+"${SUDO[@]}" mv -f "$mirrors_new" "$ETC/mirrors.txt"
+
+"${SUDO[@]}" install -m 0644 "$tmp/ghlane.conf" "$conf_new"
+"${SUDO[@]}" mv -f "$conf_new" "$CONF"
+
+"${SUDO[@]}" install -m 0755 "$tmp/ghlane" "$core_new"
+"${SUDO[@]}" mv -f "$core_new" "$LIBEXEC/ghlane"
+
 "${SUDO[@]}" ln -sfn "$LIBEXEC/ghlane" "$BIN/ghlane"
 
 install_wrapper() {
