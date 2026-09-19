@@ -31,7 +31,6 @@ REGISTRY_URL="${REGISTRY_URL-https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/
 REGISTRY_TTL="${REGISTRY_TTL:-86400}"
 REGISTRY_MAX="${REGISTRY_MAX:-8}"
 REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-5}"
-DIGEST_TTL="${DIGEST_TTL:-0}"
 
 bounded_uint() {
   local value="$1" min="$2" max="$3" fallback="$4" number
@@ -51,7 +50,6 @@ RACE_TIMEOUT=$(bounded_uint "$RACE_TIMEOUT" 1 30 2)
 REGISTRY_TTL=$(bounded_uint "$REGISTRY_TTL" 0 604800 86400)
 REGISTRY_MAX=$(bounded_uint "$REGISTRY_MAX" 0 32 8)
 REGISTRY_TIMEOUT=$(bounded_uint "$REGISTRY_TIMEOUT" 1 30 5)
-DIGEST_TTL=$(bounded_uint "$DIGEST_TTL" 0 86400 0)
 
 if [[ -n "${GHLANE_CACHE_DIR:-}" ]]; then
   CACHE_DIR="$GHLANE_CACHE_DIR"
@@ -506,32 +504,9 @@ explicit_output_path() {
 }
 
 expected_release_digest() {
-  local url="$1" key dir cache now ts digest size age api meta parsed tmp
+  local url="$1" api meta parsed tmp
   command -v python3 >/dev/null 2>&1 || return 1
   command -v sha256sum >/dev/null 2>&1 || return 1
-
-  dir="$CACHE_DIR/digests"
-  key=$(printf '%s' "$url" | sha256sum | awk '{print $1}')
-  cache="$dir/$key"
-  now=$(date +%s)
-
-  if (( DIGEST_TTL > 0 )); then
-    mkdir -p "$dir" 2>/dev/null || return 1
-  fi
-
-  if (( DIGEST_TTL > 0 )) && [[ -r "$cache" ]]; then
-    read -r ts digest size <"$cache" || true
-    if [[ "${ts:-}" =~ ^[0-9]+$ ]]; then
-      age=$((now - ts))
-      if (( age >= 0 && age < DIGEST_TTL )); then
-        [[ "$digest" == NONE ]] && return 1
-        if [[ "$digest" =~ ^[0-9a-f]{64}$ && "$size" =~ ^[0-9]+$ ]]; then
-          printf '%s %s\n' "$digest" "$size"
-          return 0
-        fi
-      fi
-    fi
-  fi
 
   parsed=$(python3 - "$url" <<'PY' 2>/dev/null
 import sys
@@ -589,34 +564,13 @@ PY
   )
   rm -f "$tmp"
 
-  if [[ "$parsed" =~ ^([0-9a-f]{64})[[:space:]]+([0-9]+)$ ]]; then
-    digest="${BASH_REMATCH[1]}"
-    size="${BASH_REMATCH[2]}"
-    if (( DIGEST_TTL > 0 )); then
-      printf '%s %s %s\n' "$now" "$digest" "$size" >"$cache.tmp.$" && mv "$cache.tmp.$" "$cache"
-    fi
-    printf '%s %s\n' "$digest" "$size"
-    return 0
-  fi
-
-  if (( DIGEST_TTL > 0 )); then
-    printf '%s NONE 0\n' "$now" >"$cache.tmp.$" && mv "$cache.tmp.$" "$cache"
-  fi
-  return 1
+  [[ "$parsed" =~ ^[0-9a-f]{64}[[:space:]]+[0-9]+$ ]] || return 1
+  printf '%s\n' "$parsed"
 }
 
-digest_cache_file() {
-  local url="$1" key
-  command -v sha256sum >/dev/null 2>&1 || return 1
-  key=$(printf '%s' "$url" | sha256sum | awk '{print $1}') || return 1
-  printf '%s/digests/%s\n' "$CACHE_DIR" "$key"
-}
 
 refresh_release_digest() {
-  local url="$1" cache
-  cache=$(digest_cache_file "$url") || return 1
-  rm -f "$cache" 2>/dev/null || true
-  expected_release_digest "$url"
+  expected_release_digest "$1"
 }
 
 file_matches_digest() {
