@@ -496,7 +496,18 @@ transport_gap 'curl --interface' --interface lo
 transport_gap 'curl --insecure' --insecure
 transport_gap 'curl --cacert' --cacert /tmp/nonexistent-ca
 
-printf '\n--- I. implicit config-file safety ---\n'
+printf '\n--- I. implicit config-file safety ---\n'unsafe_conf="$TMP/unsafe-ghlane.conf"
+cp "$CONF" "$unsafe_conf"
+printf '\ntouch %q\n' "$TMP/unsafe-config-executed" >>"$unsafe_conf"
+chmod 0666 "$unsafe_conf"
+if env GHLANE_CONFIG="$unsafe_conf" "$CORE" version >/dev/null 2>&1 &&
+   [[ ! -e "$TMP/unsafe-config-executed" ]]; then
+  pass 'writable custom GHLANE_CONFIG is not sourced'
+else
+  fail 'writable custom GHLANE_CONFIG is not sourced'
+fi
+
+
 reset
 printf '%s\n' 'https://fast.example' >"$MIRRORS"
 mkdir -p "$TMP/curlhome"
