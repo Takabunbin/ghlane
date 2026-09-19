@@ -73,9 +73,10 @@ This proves protocol/content compatibility for the canary only; it is **not** a
 trust grant. Mirror admission is not an integrity trust grant; every v1 user transfer is
 independently verified against GitHub's asset digest.
 
-A GitHub-hosted runner is only one network viewpoint. A previously published,
-manually approved mirror may be retained across a transient runner-only network
-failure, but a content/protocol mismatch is a hard rejection.
+A GitHub-hosted runner is only one network viewpoint. A previously published
+v1 endpoint may be retained across a transient runner-only network failure, but
+a content/protocol mismatch is a hard rejection. Client-side full-file digest
+verification remains mandatory regardless of how the endpoint entered v1.
 
 ## Discovery
 
@@ -94,8 +95,10 @@ External discovery sources are untrusted hints.
 ## Installer and updates
 
 Installer upgrades preserve existing configuration, migrate only the old
-official registry URL to v1, stage replacement files, and switch the core
-executable last. Existing custom `/usr/local/bin/curl` or `wget` files are
+official registry URL to v1, and stage all replacement files before committing
+them. Commit order is mirrors -> core -> config: a new core safely tolerates
+the old legacy registry configuration, while an old core is never left pointing
+at dynamic v1. Existing custom `/usr/local/bin/curl` or `wget` files are
 never overwritten.
 
 The installer payload is intended to be pinned to an immutable commit for
