@@ -250,12 +250,20 @@ case_unsafe_system_config_rejected() {
   reset_system
   run_install >/dev/null
 
+  cp /etc/ghlane.conf "$TMP/safe-ghlane.conf"
+  printf '\ntouch %q\n' "$TMP/config-executed" >>/etc/ghlane.conf
   chmod 0666 /etc/ghlane.conf
+
+  test "$(ghlane version 2>/dev/null)" = "ghlane 0.2.1"
+  test ! -e "$TMP/config-executed"
+
   if run_install >/dev/null 2>&1; then
+    cp "$TMP/safe-ghlane.conf" /etc/ghlane.conf
     chmod 0644 /etc/ghlane.conf
     return 1
   fi
 
+  cp "$TMP/safe-ghlane.conf" /etc/ghlane.conf
   chmod 0644 /etc/ghlane.conf
   ghlane self-test >/dev/null
 }
