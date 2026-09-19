@@ -425,7 +425,14 @@ bundled_bypass 'bundled curl -b cookie bypasses routing' -fsSLbcookie=secret
 bundled_bypass 'bundled curl -k TLS override bypasses routing' -fsSLk
 bundled_bypass 'curl --url-query bypasses routing' --url-query token=secret
 bundled_bypass 'curl referer (-e) bypasses routing' -e 'https://private/?token=secret'
-bundled_bypass 'wget execute (-e) bypasses routing' -e 'header=Authorization: secret'
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+run_wget -e 'header=Authorization: secret' "$URL" -O "$TMP/w" >/dev/null 2>&1 || true
+if grep -Fq 'https://fast.example/' "$LOG"; then
+  fail 'wget execute (-e) bypasses routing'
+else
+  pass 'wget execute (-e) bypasses routing'
+fi
 bundled_bypass 'unknown future curl option bypasses routing' --future-option value
 
 printf '\n--- H. transport-option semantics ---\n'
@@ -472,6 +479,18 @@ if grep -Fq 'https://fast.example/' "$LOG"; then
   gap 'WGETRC is not inspected before mirror routing'
 else
   pass 'WGETRC causes safe bypass'
+fi
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+mkdir -p "$TMP/netrchome"
+printf 'machine github.com login user password secret\n' >"$TMP/netrchome/.netrc"
+HOME="$TMP/netrchome" run_curl "$URL" -o "$TMP/netrc.out" >/dev/null 2>&1 || true
+probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if (( probes == 0 )); then
+  pass 'implicit .netrc causes safe bypass'
+else
+  fail 'implicit .netrc causes safe bypass'
 fi
 
 printf '\n--- J. mirror trust / content correctness ---\n'
@@ -548,6 +567,6 @@ printf '\n========================================\n'
 printf ' summary\n'
 printf '========================================\n'
 printf 'PASS=%d  FAIL=%d  GAP=%d\n' "$PASS" "$FAIL" "$GAP"
-printf 'GAP = known hardening/feature gap, not a regression in the current V0.1 contract.\n'
+printf 'GAP = known non-security optimization gap, not a regression in the current 0.2.1 contract.\n'
 
 exit "$(( FAIL > 0 ? 1 : 0 ))"
