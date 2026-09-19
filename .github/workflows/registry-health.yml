@@ -52,6 +52,7 @@ jobs:
           retention-days: 14
 
   refresh:
+    needs: discover
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -60,10 +61,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build trusted production registry
+      - name: Download quarantine candidates
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: mirror-discovery-report
+          path: /tmp/ghlane-discovery
+
+      - name: Build production registries
         env:
-          SOURCE_FILE: mirrors.txt
+          SOURCE_FILE: /tmp/ghlane-discovery/ghlane-candidates.txt
+          STABLE_FILE: mirrors.txt
           PREVIOUS_FILE: registry-v1.txt
+          LEGACY_PREVIOUS_FILE: registry.txt
           OUTPUT_FILE: registry-v1.txt
           LEGACY_OUTPUT_FILE: registry.txt
         run: |
