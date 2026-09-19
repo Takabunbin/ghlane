@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.1.9"
+VERSION="0.1.10"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 [[ -r "$CONFIG" ]] && . "$CONFIG"
 
@@ -137,33 +137,35 @@ save_candidate() {
 }
 
 race_candidates() {
-  local url="$1" tmpdir candidate target stats speed content_type http_code size_download i=0 best
+  local url="$1" tmpdir candidate target stats speed content_type http_code size_download rc i=0 best
   tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane.XXXXXX") || return 1
 
-  # ponytail: fixed 256 KiB samples avoid adaptive-race complexity. Only
-  # completed probes are eligible. If fixed sampling proves unstable across
-  # real networks, upgrade to staggered/adaptive probing instead of heuristics.
+  # ponytail: each candidate gets the same 2s budget. A max-time timeout is
+  # still a valid sample if bytes arrived; other curl failures are rejected.
+  # If this fixed-time race proves unstable, upgrade to staggered/adaptive probing.
   while IFS= read -r candidate; do
     [[ -n "$candidate" && "$candidate" != \#* ]] || continue
     [[ "$candidate" == DIRECT || "$candidate" == https://* ]] || continue
     target=$(candidate_url "$candidate" "$url")
     (
       speed=0
-      if stats=$("$REAL_CURL" -q -fsSL \
+      stats=$("$REAL_CURL" -q -fsSL \
         --connect-timeout 2 \
         --max-time "$RACE_TIMEOUT" \
         --range "0-${SAMPLE_BYTES}" \
         --max-filesize "$((SAMPLE_BYTES + 1))" \
         -o /dev/null \
         -w '%{speed_download}|%{content_type}|%{http_code}|%{size_download}' \
-        "$target" 2>/dev/null); then
-        IFS='|' read -r speed content_type http_code size_download <<< "$stats"
-        case "$http_code" in
-          200|206) ;;
-          *) speed=0 ;;
-        esac
-        [[ "${content_type,,}" == text/html* || "${size_download:-0}" == 0 ]] && speed=0
-      fi
+        "$target" 2>/dev/null)
+      rc=$?
+      IFS='|' read -r speed content_type http_code size_download <<< "$stats"
+
+      case "$rc:$http_code" in
+        0:200|0:206|28:200|28:206) ;;
+        *) speed=0 ;;
+      esac
+      [[ "${content_type,,}" == text/html* || "${size_download:-0}" == 0 ]] && speed=0
+
       printf '%s\t%s\n' "${speed:-0}" "$candidate"
     ) > "$tmpdir/$i" &
     i=$((i + 1))
