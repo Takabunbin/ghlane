@@ -204,6 +204,19 @@ EOF
   test "$(ghlane version)" = "ghlane 0.2.1"
 }
 
+case_repair_missing_backend_path() {
+  reset_system
+  run_install >/dev/null
+
+  sed -i "s|^REAL_CURL=.*|REAL_CURL='/definitely/missing/curl'|" /etc/ghlane.conf
+  sed -i "s|^REAL_WGET=.*|REAL_WGET='/definitely/missing/wget'|" /etc/ghlane.conf
+  run_install >/dev/null
+
+  grep -Fxq "REAL_CURL='/usr/bin/curl'" /etc/ghlane.conf
+  grep -Eq "^REAL_WGET='/usr/bin/wget'$|^REAL_WGET='[^']*/wget'$" /etc/ghlane.conf
+  ghlane self-test >/dev/null
+}
+
 case_migrate_default_registry_url() {
   reset_system
   run_install >/dev/null
@@ -268,6 +281,7 @@ run_case 'custom /usr/local/bin/curl is preserved' case_custom_curl
 run_case 'custom /usr/local/bin/wget is preserved' case_custom_wget
 run_case 'bad upgrade leaves working install untouched' case_bad_upgrade
 run_case 'reinstall preserves custom config' case_preserve_custom_config
+run_case 'reinstall repairs vanished backend paths' case_repair_missing_backend_path
 run_case 'old default registry URL migrates to registry-v1' case_migrate_default_registry_url
 run_case 'interrupted upgrade before core switch keeps old core working' case_interrupted_upgrade_keeps_old_core_working
 run_case 'safe uninstall removes only ghlane files' case_uninstall
