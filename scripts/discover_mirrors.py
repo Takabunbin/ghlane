@@ -101,6 +101,18 @@ def recursive_strings(value) -> Iterable[str]:
             yield from recursive_strings(child)
 
 
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        old_host = (urllib.parse.urlsplit(req.full_url).hostname or "").lower()
+        new_host = (urllib.parse.urlsplit(newurl).hostname or "").lower()
+        if old_host != new_host:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
 def fetch_bytes(url: str, token: str | None = None, timeout: int = 15) -> bytes:
     headers = {
         "User-Agent": "ghlane-mirror-discovery/0.2",
@@ -110,7 +122,8 @@ def fetch_bytes(url: str, token: str | None = None, timeout: int = 15) -> bytes:
     if token and host == "api.github.com":
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    opener = urllib.request.build_opener(SafeRedirectHandler())
+    with opener.open(request, timeout=timeout) as response:
         return response.read(1_048_576)
 
 
