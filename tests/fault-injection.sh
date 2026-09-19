@@ -157,7 +157,7 @@ REAL_CURL='$TMP/fake-curl'
 REAL_WGET='$TMP/fake-wget'
 MIRROR_FILE='$MIRRORS'
 BEST_TTL='3600'
-SAMPLE_BYTES='1048575'
+SAMPLE_BYTES='262143'
 RACE_TIMEOUT='2'
 EOF
 }
@@ -275,12 +275,12 @@ run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
 expect_route 'cached mirror removed from registry is ignored' 'https://good.example'
 
 reset
-printf '%s\n' 'https://good.example' >"$MIRRORS"
+printf '%s\n%s\n' 'https://good.example' 'https://slow.example' >"$MIRRORS"
 future=$(( $(date +%s) + 86400 ))
 printf '%s %s\n' "$future" 'https://slow.example' >"$TMP/cache/best"
 run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
 if [[ "$(cached_route)" == 'https://slow.example' ]]; then
-  gap 'future cache timestamp is accepted (clock-skew hardening missing)'
+  fail 'future cache timestamp is rejected'
 else
   pass 'future cache timestamp is rejected'
 fi
@@ -394,7 +394,25 @@ printf '%s\n' 'https://fast.example' >"$MIRRORS"
 out=$(run_curl "$URL" 2>/dev/null)
 if [[ "$out" == 'OK' ]]; then pass 'stdout download remains usable'; else fail 'stdout download remains usable'; fi
 
-printf '\n--- G. transport-option semantics ---\n'
+printf '\n--- G. bundled short-option safety ---\n'
+bundled_bypass() {
+  local name="$1"
+  shift
+  reset
+  printf '%s\n' 'https://fast.example' >"$MIRRORS"
+  run_curl "$@" "$URL" -o "$TMP/a" >/dev/null 2>&1 || true
+  probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+  if (( probes == 0 )); then
+    pass "$name"
+  else
+    fail "$name"
+  fi
+}
+bundled_bypass 'bundled curl -u auth bypasses routing' -fsSLuuser:pass
+bundled_bypass 'bundled curl -b cookie bypasses routing' -fsSLbcookie=secret
+bundled_bypass 'bundled curl -k TLS override bypasses routing' -fsSLk
+
+printf '\n--- H. transport-option semantics ---\n'
 transport_gap() {
   local name="$1"
   shift
@@ -417,7 +435,7 @@ transport_gap 'curl --interface' --interface lo
 transport_gap 'curl --insecure' --insecure
 transport_gap 'curl --cacert' --cacert /tmp/nonexistent-ca
 
-printf '\n--- H. implicit config-file safety ---\n'
+printf '\n--- I. implicit config-file safety ---\n'
 reset
 printf '%s\n' 'https://fast.example' >"$MIRRORS"
 mkdir -p "$TMP/curlhome"
@@ -440,7 +458,7 @@ else
   pass 'WGETRC causes safe bypass'
 fi
 
-printf '\n--- I. mirror trust / content correctness ---\n'
+printf '\n--- J. mirror trust / content correctness ---\n'
 reset
 printf '%s\n%s\n' 'https://badbin.example' 'https://good.example' >"$MIRRORS"
 run_curl "$URL" -o "$TMP/badbin.out" >/dev/null 2>&1
@@ -459,7 +477,7 @@ else
   pass 'CRLF mirror registry is normalized'
 fi
 
-printf '\n--- J. concurrency ---\n'
+printf '\n--- K. concurrency ---\n'
 reset
 printf '%s\n%s\n' 'https://slow.example' 'https://fast.example' >"$MIRRORS"
 pids=()
@@ -496,7 +514,7 @@ else
   fail '20 concurrent warm-cache downloads avoid re-racing'
 fi
 
-printf '\n--- K. wget final failure ---\n'
+printf '\n--- L. wget final failure ---\n'
 reset
 printf '%s\n' 'https://fast.example' >"$MIRRORS"
 printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
