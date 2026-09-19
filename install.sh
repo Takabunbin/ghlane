@@ -20,7 +20,7 @@ fi
 old_real_curl=""
 old_real_wget=""
 if [[ -r "$CONF" ]]; then
-  . "$CONF"
+  # shellcheck disable=SC1090 -- CONF is the root-owned ghlane config.\n  . "$CONF"
   old_real_curl="${REAL_CURL:-}"
   old_real_wget="${REAL_WGET:-}"
 fi
