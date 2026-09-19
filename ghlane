@@ -32,6 +32,26 @@ REGISTRY_MAX="${REGISTRY_MAX:-8}"
 REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-5}"
 DIGEST_TTL="${DIGEST_TTL:-0}"
 
+bounded_uint() {
+  local value="$1" min="$2" max="$3" fallback="$4" number
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    number=$((10#$value))
+    if (( number >= min && number <= max )); then
+      printf '%s\n' "$number"
+      return
+    fi
+  fi
+  printf '%s\n' "$fallback"
+}
+
+BEST_TTL=$(bounded_uint "$BEST_TTL" 0 86400 3600)
+SAMPLE_BYTES=$(bounded_uint "$SAMPLE_BYTES" 1023 1048575 262143)
+RACE_TIMEOUT=$(bounded_uint "$RACE_TIMEOUT" 1 30 2)
+REGISTRY_TTL=$(bounded_uint "$REGISTRY_TTL" 0 604800 86400)
+REGISTRY_MAX=$(bounded_uint "$REGISTRY_MAX" 0 32 8)
+REGISTRY_TIMEOUT=$(bounded_uint "$REGISTRY_TIMEOUT" 1 30 5)
+DIGEST_TTL=$(bounded_uint "$DIGEST_TTL" 0 86400 0)
+
 if [[ -n "${GHLANE_CACHE_DIR:-}" ]]; then
   CACHE_DIR="$GHLANE_CACHE_DIR"
 elif [[ -n "${XDG_CACHE_HOME:-}" ]]; then
