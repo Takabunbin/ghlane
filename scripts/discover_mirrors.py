@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -44,6 +45,14 @@ def canonicalize(raw: str) -> str | None:
         return None
     host = parts.hostname.lower().rstrip(".")
     if host in DENY_HOSTS or host.endswith(".githubusercontent.com"):
+        return None
+    if host == "localhost" or host.endswith(".localhost"):
+        return None
+    try:
+        literal_ip = ipaddress.ip_address(host)
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None and not literal_ip.is_global:
         return None
     try:
         port = parts.port
