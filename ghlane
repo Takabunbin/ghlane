@@ -580,7 +580,7 @@ verified_transfer() {
   run_candidate_to_file "$tool" "$real" "$url" "$candidate" "$tmp" "$@"
   status=$?
   if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
-    mv -f -- "$tmp" "$out"
+    mv -fT -- "$tmp" "$out"
     return $?
   fi
 
@@ -600,7 +600,7 @@ verified_transfer() {
     run_candidate_to_file "$tool" "$real" "$url" DIRECT "$tmp" "$@"
     status=$?
     if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
-      mv -f -- "$tmp" "$out"
+      mv -fT -- "$tmp" "$out"
       return $?
     fi
     if (( status != 0 )); then
@@ -615,7 +615,7 @@ verified_transfer() {
   if [[ -f "$tmp" ]] && fresh=$(refresh_release_digest "$url" 2>/dev/null); then
     read -r digest size <<<"$fresh"
     if file_matches_digest "$tmp" "$digest" "$size"; then
-      mv -f -- "$tmp" "$out"
+      mv -fT -- "$tmp" "$out"
       return $?
     fi
   fi
