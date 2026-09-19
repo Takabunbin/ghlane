@@ -137,10 +137,13 @@ has_implicit_config() {
       [[ -n "${CURL_HOME:-}" && -f "$CURL_HOME/.curlrc" ]] && return 0
       [[ -n "${XDG_CONFIG_HOME:-}" && -f "$XDG_CONFIG_HOME/curlrc" ]] && return 0
       [[ -n "${HOME:-}" && -f "$HOME/.curlrc" ]] && return 0
+      config_has_sensitive_directive /etc/curlrc && return 0
+      config_has_sensitive_directive /usr/local/etc/curlrc && return 0
       ;;
     wget)
       [[ -n "${WGETRC:-}" ]] && return 0
       [[ -n "${HOME:-}" && -f "$HOME/.wgetrc" ]] && return 0
+      config_has_sensitive_directive /etc/wgetrc && return 0
       ;;
   esac
   return 1
@@ -151,12 +154,14 @@ find_single_url() {
   for arg in "$@"; do
     url="$arg"
     [[ "$url" == --url=* ]] && url="${url#--url=}"
-    if is_accelerable_url "$url" && [[ "$url" != *\?* && "$url" != *\#* ]]; then
-      found="$url"
+    if [[ "$url" == *://* ]]; then
       ((count += 1))
+      if is_accelerable_url "$url" && [[ "$url" != *\?* && "$url" != *\#* ]]; then
+        found="$url"
+      fi
     fi
   done
-  [[ $count -eq 1 ]] || return 1
+  [[ $count -eq 1 && -n "$found" ]] || return 1
   printf '%s\n' "$found"
 }
 
