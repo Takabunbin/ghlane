@@ -1,5 +1,1 @@
-https://gh-proxy.com
-https://gh.xmly.dev
-https://gh.ddlc.top
-https://ghfast.top
-https://ghproxy.net
+https://github.com
