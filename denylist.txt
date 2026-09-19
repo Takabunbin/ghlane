@@ -1,0 +1,3 @@
+# Mirror endpoints explicitly excluded from discovery/publication.
+# Add one canonical HTTPS endpoint per line when an operator opts out,
+# an endpoint is known unsafe, or it should no longer be probed.

@@ -31,6 +31,7 @@ ok("URL canonicalization rejects credentials, non-HTTPS and GitHub originals")
 post = """
 Thanks:
 https://one.example/
+~~https://retired.example/~~
 https://two.example
 > https://quoted.example
 """
@@ -46,9 +47,11 @@ with tempfile.TemporaryDirectory() as td:
     sources = td / "sources.json"
     output = td / "candidates.txt"
     report = td / "report.json"
+    denylist = td / "denylist.txt"
 
     seed.write_text("https://seed.example\n", encoding="utf-8")
     current.write_text("https://current.example\n", encoding="utf-8")
+    denylist.write_text("https://denied.example\n", encoding="utf-8")
     sources.write_text(
         json.dumps(
             [
@@ -62,9 +65,9 @@ with tempfile.TemporaryDirectory() as td:
     )
 
     fixture = {
-        "opt": ["https://optin.example"],
-        "hint-a": ["https://consensus.example", "https://single.example"],
-        "hint-b": ["https://consensus.example"],
+        "opt": ["https://optin.example", "https://denied.example"],
+        "hint-a": ["https://consensus.example", "https://single.example", "https://denied.example"],
+        "hint-b": ["https://consensus.example", "https://denied.example"],
         "hint-c": ["https://other.example"],
     }
 
@@ -84,6 +87,8 @@ with tempfile.TemporaryDirectory() as td:
             str(output),
             "--report",
             str(report),
+            "--denylist",
+            str(denylist),
         ]
         assert mod.main() == 0
     finally:
@@ -99,6 +104,7 @@ with tempfile.TemporaryDirectory() as td:
     ]
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["candidate_count"] == 4
-    ok("first-party, opt-in and two-source consensus rules work")
+    assert data["denylist_count"] == 1
+    ok("first-party, opt-in, two-source consensus and denylist rules work")
 
 print(f"PASS={PASS} FAIL=0")

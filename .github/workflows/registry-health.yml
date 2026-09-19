@@ -10,6 +10,7 @@ on:
     paths:
       - mirrors.txt
       - sources.json
+      - denylist.txt
       - scripts/discover_mirrors.py
       - scripts/build-registry.sh
       - .github/workflows/registry-health.yml
@@ -31,6 +32,7 @@ jobs:
             --sources sources.json \
             --seed mirrors.txt \
             --current registry.txt \
+            --denylist denylist.txt \
             --output /tmp/ghlane-candidates.txt \
             --report /tmp/ghlane-discovery.json
 
