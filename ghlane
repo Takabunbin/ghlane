@@ -51,9 +51,9 @@ args_are_safe() {
     [[ "$arg" != -* || "$arg" == "-" ]] && continue
 
     case "$tool:$arg" in
-      curl:--fail|curl:--silent|curl:--show-error|curl:--location|curl:--remote-name|\
-      curl:--remote-name-all|curl:--remote-header-name|curl:--no-progress-meter|\
-      curl:--progress-bar|curl:--globoff|curl:--no-buffer|curl:--remote-time|\
+      curl:--fail|curl:--silent|curl:--show-error|curl:--location|\
+      curl:--no-progress-meter|curl:--progress-bar|curl:--globoff|\
+      curl:--no-buffer|curl:--remote-time|\
       curl:--retry-all-errors|curl:--retry-connrefused|curl:--remove-on-error|\
       wget:--quiet|wget:--no-verbose|wget:--show-progress)
         continue
@@ -91,7 +91,7 @@ args_are_safe() {
         for ((i=0; i<${#short}; i++)); do
           ch="${short:i:1}"
           case "$ch" in
-            f|s|S|L|O|J|N|R|g|q) ;;
+            f|s|S|L|N|R|g|q) ;;
             o)
               if (( i + 1 == ${#short} )); then
                 needs_value=1
