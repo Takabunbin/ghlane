@@ -364,10 +364,11 @@ set +e
 env   TMPDIR="/proc/ghlane-tmp-$$"   GHLANE_CONFIG="$CONF"   GHLANE_CACHE_DIR="$TMP/cache"   FAKE_LOG="$LOG"   "$TMP/bin/curl" "$URL" -o "$TMP/no-tmp.out" >/dev/null 2>&1
 rc=$?
 set -e
-if [[ $rc -eq 0 && "$(cached_route)" == 'DIRECT' ]]; then
-  pass 'unusable TMPDIR safely falls back to DIRECT'
+probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if [[ $rc -eq 0 && $probes -eq 0 ]]; then
+  pass 'unusable TMPDIR safely bypasses acceleration and uses DIRECT'
 else
-  fail 'unusable TMPDIR safely falls back to DIRECT'
+  fail 'unusable TMPDIR safely bypasses acceleration and uses DIRECT'
 fi
 
 reset
