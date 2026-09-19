@@ -141,37 +141,13 @@ STABLE_LIMIT=$STABLE_SLOTS
 PUBLISHED=0
 
 if [[ -r "$STABLE_FILE" ]]; then
-  while IFS= read -r mirror || [[ -n "$mirror" ]]; do
-    mirror="${mirror//$'\r'/}"
-    [[ -z "$mirror" || "$mirror" == \#* ]] && continue
-    [[ -n "${IS_HEALTHY[$mirror]:-}" ]] || continue
-    [[ -z "${SELECTED[$mirror]:-}" ]] || continue
-    printf '%s\n' "$mirror" >>"$OUT"
-    SELECTED["$mirror"]=1
-    PUBLISHED=$((PUBLISHED + 1))
-    (( PUBLISHED >= STABLE_LIMIT )) && break
-  done <"$STABLE_FILE"
-fi
-
-# ponytail: five stable slots plus weekly rotating exploration slots avoid
-# persistent health-history state while ensuring new mirrors are not starved.
-# If the pool routinely exceeds 128 or rotation churn becomes harmful, add
-# capped reliability history instead of increasing client probe fan-out.
-EXPLORE="$TMP/explore"
-WEEK=$(date -u +%G-%V)
-: >"$EXPLORE"
-
-for mirror in "${HEALTHY_LIST[@]}"; do
+  while read -r _ mirror; do
+  (( PUBLISHED >= MAX_MIRRORS )) && break
+  [[ -n "$mirror" ]] || continue
   [[ -z "${SELECTED[$mirror]:-}" ]] || continue
-  key=$(printf '%s' "$WEEK|$mirror" | sha256sum | awk '{print $1}')
-  printf '%s\t%s\n' "$key" "$mirror" >>"$EXPLORE"
-done
-
-while IFS=
   printf '%s\n' "$mirror" >>"$OUT"
   SELECTED["$mirror"]=1
   PUBLISHED=$((PUBLISHED + 1))
-  (( PUBLISHED >= MAX_MIRRORS )) && break
 done < <(sort "$EXPLORE")
 
 if (( PUBLISHED < MIN_HEALTHY )); then
