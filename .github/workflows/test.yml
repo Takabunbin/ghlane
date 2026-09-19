@@ -8,8 +8,10 @@ jobs:
   shell:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck >/dev/null
           bash -n ghlane
           bash -n install.sh
           bash -n uninstall.sh
@@ -19,9 +21,10 @@ jobs:
           bash -n scripts/build-registry.sh
           bash -n tests/registry-health.sh
           python3 -m py_compile scripts/discover_mirrors.py tests/discovery.py
+          shellcheck ghlane install.sh uninstall.sh scripts/build-registry.sh tests/fault-injection.sh tests/installer-matrix.sh tests/registry.sh tests/registry-health.sh
           chmod +x ghlane tests/fault-injection.sh tests/installer-matrix.sh tests/registry.sh scripts/build-registry.sh tests/registry-health.sh
           ./ghlane self-test
-          test "$(./ghlane version)" = "ghlane 0.2.0"
+          test "$(./ghlane version)" = "ghlane 0.2.1"
           CORE="$PWD/ghlane" ./tests/fault-injection.sh
           CORE="$PWD/ghlane" ./tests/registry.sh
           ./tests/registry-health.sh
@@ -44,7 +47,7 @@ jobs:
     name: installer (${{ matrix.label }})
     container: ${{ matrix.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: |
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates sudo passwd >/dev/null
