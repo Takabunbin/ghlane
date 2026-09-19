@@ -20,6 +20,13 @@ fi
 old_real_curl=""
 old_real_wget=""
 if [[ -r "$CONF" ]]; then
+  conf_owner=$(stat -c '%u' "$CONF" 2>/dev/null || printf 'unsafe')
+  conf_mode=$(stat -c '%a' "$CONF" 2>/dev/null || printf '777')
+  if [[ "$conf_owner" != 0 || ! "$conf_mode" =~ ^[0-7]+$ ]] || (( (8#$conf_mode & 022) != 0 )); then
+    echo "ghlane: refusing unsafe $CONF (must be root-owned and not group/world writable)" >&2
+    exit 1
+  fi
+
   REAL_CURL=""
   REAL_WGET=""
   # shellcheck disable=SC1090
