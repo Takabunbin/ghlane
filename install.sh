@@ -60,6 +60,10 @@ REAL_CURL='$real_curl'
 REAL_WGET='${real_wget:-/usr/bin/wget}'
 MIRROR_FILE='$ETC/mirrors.txt'
 BEST_TTL='3600'
+REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry.txt'
+REGISTRY_TTL='86400'
+REGISTRY_MAX='8'
+REGISTRY_TIMEOUT='5'
 CONF
 "${SUDO[@]}" install -m 0644 "$tmp/ghlane.conf" "$CONF"
 "${SUDO[@]}" ln -sfn "$LIBEXEC/ghlane" "$BIN/ghlane"
