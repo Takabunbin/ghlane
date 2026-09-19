@@ -6,7 +6,6 @@ CURL_BIN="${CURL_BIN:-/usr/bin/curl}"
 SOURCE_FILE="${SOURCE_FILE:-$ROOT/mirrors.txt}"
 STABLE_FILE="${STABLE_FILE:-$ROOT/mirrors.txt}"
 PREVIOUS_FILE="${PREVIOUS_FILE:-$ROOT/registry-v1.txt}"
-LEGACY_PREVIOUS_FILE="${LEGACY_PREVIOUS_FILE:-$ROOT/registry.txt}"
 OUTPUT_FILE="${OUTPUT_FILE:-$ROOT/registry-v1.txt}"
 LEGACY_OUTPUT_FILE="${LEGACY_OUTPUT_FILE:-$ROOT/registry.txt}"
 PROBE_URL="${PROBE_URL:-https://github.com/komari-monitor/komari/releases/download/1.5.0-fix1/komari-linux-amd64}"
@@ -75,7 +74,6 @@ fi
 
 declare -A STABLE=()
 declare -A PREVIOUS=()
-declare -A LEGACY_PREVIOUS=()
 
 if [[ -r "$STABLE_FILE" ]]; then
   while IFS= read -r mirror || [[ -n "$mirror" ]]; do
@@ -93,13 +91,6 @@ if [[ -r "$PREVIOUS_FILE" ]]; then
   done <"$PREVIOUS_FILE"
 fi
 
-if [[ -r "$LEGACY_PREVIOUS_FILE" ]]; then
-  while IFS= read -r mirror || [[ -n "$mirror" ]]; do
-    mirror="${mirror//$'\r'/}"
-    [[ "$mirror" == https://* ]] || continue
-    LEGACY_PREVIOUS["$mirror"]=1
-  done <"$LEGACY_PREVIOUS_FILE"
-fi
 
 probe_one() {
   local index="$1" mirror="$2" sample stats rc code ctype bytes speed sha
@@ -155,7 +146,6 @@ done
 
 declare -A ELIGIBLE=()
 declare -A SELECTED=()
-declare -A LEGACY_OK=()
 PASS_COUNT=0
 SOFT_RETAINED=0
 HARD_COUNT=0
@@ -165,7 +155,6 @@ for i in "${!CANDIDATES[@]}"; do
 
   if [[ -r "$PASS_DIR/$i" ]]; then
     ELIGIBLE["$mirror"]=1
-    [[ -n "${STABLE[$mirror]:-}" ]] && LEGACY_OK["$mirror"]=1
     PASS_COUNT=$((PASS_COUNT + 1))
     continue
   fi
@@ -181,9 +170,6 @@ for i in "${!CANDIDATES[@]}"; do
   if [[ -r "$SOFT_DIR/$i" && -n "${PREVIOUS[$mirror]:-}" ]]; then
     ELIGIBLE["$mirror"]=1
     SOFT_RETAINED=$((SOFT_RETAINED + 1))
-  fi
-  if [[ -r "$SOFT_DIR/$i" && -n "${STABLE[$mirror]:-}" && -n "${LEGACY_PREVIOUS[$mirror]:-}" ]]; then
-    LEGACY_OK["$mirror"]=1
   fi
 done
 
@@ -231,16 +217,10 @@ while read -r _ mirror; do
   PUBLISHED=$((PUBLISHED + 1))
 done < <(sort "$EXPLORE")
 
-# Legacy 0.2.0 clients do not have end-to-end digest verification. Never expose
-# auto-discovered endpoints to them; publish only manually approved mirrors.
-if [[ -r "$STABLE_FILE" ]]; then
-  while IFS= read -r mirror || [[ -n "$mirror" ]]; do
-    mirror="${mirror//$'\r'/}"
-    [[ "$mirror" == https://* ]] || continue
-    [[ -n "${LEGACY_OK[$mirror]:-}" ]] || continue
-    printf '%s\n' "$mirror" >>"$LEGACY_OUT"
-  done <"$STABLE_FILE"
-fi
+# Legacy 0.2.0 clients do not have end-to-end digest verification. Publish a
+# deliberately unusable GitHub prefix so old clients keep a syntactically
+# valid registry but can only succeed through their built-in DIRECT route.
+printf 'https://github.com\n' >"$LEGACY_OUT"
 
 mkdir -p "$(dirname "$OUTPUT_FILE")"
 mv "$OUT" "$OUTPUT_FILE"
