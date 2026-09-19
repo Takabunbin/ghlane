@@ -120,10 +120,10 @@ fi
 
 if [[ "$host" == 'oversize.example' ]]; then
   if [[ -n "$out" && "$out" != /dev/null ]]; then
-    yes X | tr -d '\n' | head -c 4096 >"$out"
+    yes X | tr -d '\n' | head -c 131072 >"$out"
     exit $?
   fi
-  yes X | tr -d '\n' | head -c 4096
+  yes X | tr -d '\n' | head -c 131072
   exit $?
 fi
 
