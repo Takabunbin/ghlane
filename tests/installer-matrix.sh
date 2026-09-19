@@ -5,6 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PASS=0
 FAIL=0
 TMP=$(mktemp -d)
+chmod 0755 "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 pass() { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
