@@ -167,7 +167,26 @@ for mirror in "${HEALTHY_LIST[@]}"; do
   printf '%s\t%s\n' "$key" "$mirror" >>"$EXPLORE"
 done
 
-while IFS=$'\t' read -r _ mirror; do
+while IFS=
+  printf '%s\n' "$mirror" >>"$OUT"
+  SELECTED["$mirror"]=1
+  PUBLISHED=$((PUBLISHED + 1))
+  (( PUBLISHED >= MAX_MIRRORS )) && break
+done < <(sort "$EXPLORE")
+
+if (( PUBLISHED < MIN_HEALTHY )); then
+  echo "registry-health: only $PUBLISHED publishable mirror(s); keeping existing registry" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+mv "$OUT" "$OUTPUT_FILE"
+
+echo "healthy candidates: $TOTAL_HEALTHY"
+echo "published: $PUBLISHED (stable<=${STABLE_LIMIT}, exploration=$((PUBLISHED > STABLE_LIMIT ? PUBLISHED - STABLE_LIMIT : 0)))"
+echo "registry: $OUTPUT_FILE"
+\t' read -r _ mirror; do
+  (( PUBLISHED >= MAX_MIRRORS )) && break
   [[ -n "$mirror" ]] || continue
   [[ -z "${SELECTED[$mirror]:-}" ]] || continue
   printf '%s\n' "$mirror" >>"$OUT"
