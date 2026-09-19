@@ -13,7 +13,19 @@ jobs:
           bash -n ghlane
           bash -n install.sh
           bash -n tests/fault-injection.sh
-          chmod +x ghlane tests/fault-injection.sh
+          bash -n tests/installer-matrix.sh
+          chmod +x ghlane tests/fault-injection.sh tests/installer-matrix.sh
           ./ghlane self-test
           test "$(./ghlane version)" = "ghlane 0.1.10"
           CORE="$PWD/ghlane" ./tests/fault-injection.sh
+
+  installer:
+    runs-on: ubuntu-latest
+    container: debian:13-slim
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates sudo >/dev/null
+          bash -n tests/installer-matrix.sh
+          bash tests/installer-matrix.sh
