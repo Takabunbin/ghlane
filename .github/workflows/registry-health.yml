@@ -1,0 +1,38 @@
+name: registry-health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - mirrors.txt
+      - scripts/build-registry.sh
+      - .github/workflows/registry-health.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build healthy registry
+        run: |
+          chmod +x scripts/build-registry.sh
+          scripts/build-registry.sh
+      - name: Commit registry changes
+        run: |
+          if git diff --quiet -- registry.txt; then
+            echo "registry unchanged"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add registry.txt
+          git commit -m "chore: refresh healthy mirror registry"
+          git push
