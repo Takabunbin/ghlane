@@ -15,8 +15,9 @@ command against GitHub instead.
 - `registry-v1.txt` may include bounded, health-checked discovered endpoints.
   v1 clients do not trust those endpoints: every accelerated asset is verified
   against GitHub's SHA-256 metadata before it becomes visible to the caller.
-- Legacy `registry.txt` is restricted to manually approved mirrors because
-  0.2.0 clients do not have end-to-end digest verification.
+- Legacy `registry.txt` is deliberately DIRECT-only. It contains an unusable
+  GitHub prefix so 0.2.0 clients, which lack end-to-end digest verification,
+  cannot successfully use a mirror from the remote registry.
 
 ## Integrity
 
@@ -64,7 +65,7 @@ empty v1 registry means DIRECT-only.
 
 Central health checks compare a fixed GitHub Release sample byte-for-byte.
 This proves protocol/content compatibility for the canary only; it is **not** a
-trust grant. Trust comes from manual admission, while every user transfer is
+trust grant. Mirror admission is not an integrity trust grant; every v1 user transfer is
 independently verified against GitHub's asset digest.
 
 A GitHub-hosted runner is only one network viewpoint. A previously published,
@@ -83,7 +84,7 @@ External discovery sources are untrusted hints.
 - Discovery runs read-only and publishes only a workflow artifact/report.
 - A separate write-scoped job consumes that artifact strictly as URL data,
   performs byte-for-byte canary checks, and may place verified discoveries only
-  in the versioned v1 registry. The legacy registry remains manual-only.
+  in the versioned v1 registry. The legacy registry remains DIRECT-only.
 
 ## Installer and updates
 
