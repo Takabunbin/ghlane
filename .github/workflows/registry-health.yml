@@ -18,9 +18,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: registry-health
+  cancel-in-progress: false
+
 jobs:
   discover:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -54,6 +59,7 @@ jobs:
   refresh:
     needs: discover
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
