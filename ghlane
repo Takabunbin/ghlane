@@ -609,6 +609,11 @@ run_candidate_to_file() {
     fi
   done
 
+  if [[ "$candidate" == DIRECT ]]; then
+    "$real" "${args[@]}"
+    return $?
+  fi
+
   blocks=$(( (max_size + 1023) / 1024 ))
   (( blocks >= 64 )) || blocks=64
   (
@@ -616,9 +621,17 @@ run_candidate_to_file() {
     # Linux/Bash file-size limits use KiB units. Keep a small 64 KiB floor so
     # helper/runtime writes are not starved for tiny assets; digest+exact-size
     # validation still rejects every extra byte before commit.
-    ulimit -f "$blocks" 2>/dev/null || true
+    ulimit -f "$blocks" 2>/dev/null || exit 125
     "$real" "${args[@]}"
   )
+}
+
+commit_verified_file() {
+  local tmp="$1" out="$2"
+  # tmp is created beside out, so a hard link is same-filesystem and provides
+  # an atomic no-clobber create. This closes the precheck -> final-commit race.
+  ln -- "$tmp" "$out" 2>/dev/null || return 1
+  rm -f -- "$tmp"
 }
 
 verified_transfer() {
@@ -635,8 +648,11 @@ verified_transfer() {
   run_candidate_to_file "$tool" "$real" "$url" "$candidate" "$tmp" "$size" "$@"
   status=$?
   if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
-    mv -fT -- "$tmp" "$out"
-    return $?
+    if commit_verified_file "$tmp" "$out"; then
+      return 0
+    fi
+    rm -f "$tmp"
+    [[ "$tool" == curl ]] && return 23 || return 3
   fi
 
   # Local write/argument failures are not route failures. Do not evict a good
@@ -655,39 +671,45 @@ verified_transfer() {
     run_candidate_to_file "$tool" "$real" "$url" DIRECT "$tmp" "$size" "$@"
     status=$?
     if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
-      mv -fT -- "$tmp" "$out"
-      return $?
+      if commit_verified_file "$tmp" "$out"; then
+        return 0
+      fi
+      rm -f "$tmp"
+      [[ "$tool" == curl ]] && return 23 || return 3
     fi
     if (( status != 0 )); then
       rm -f "$tmp"
       return "$status"
     fi
+  elif (( status != 0 )); then
+    rm -f "$tmp"
+    return "$status"
   fi
 
   # GitHub allows release assets to be replaced under the same URL. If a
-  # direct download disagrees with cached metadata, refresh metadata once and
-  # validate the already-downloaded direct file again before failing closed.
+  # successful direct download disagrees with cached metadata, refresh once
+  # and validate the already-downloaded direct file again before failing closed.
   if [[ -f "$tmp" ]] && fresh=$(refresh_release_digest "$url" 2>/dev/null); then
     read -r digest size <<<"$fresh"
     if file_matches_digest "$tmp" "$digest" "$size"; then
-      mv -fT -- "$tmp" "$out"
-      return $?
+      if commit_verified_file "$tmp" "$out"; then
+        return 0
+      fi
+      rm -f "$tmp"
+      [[ "$tool" == curl ]] && return 23 || return 3
     fi
   fi
 
   rm -f "$tmp"
   log 'download failed GitHub digest verification'
-  if (( status == 0 )); then
-    [[ "$tool" == curl ]] && status=18 || status=4
-  fi
-  return "$status"
+  [[ "$tool" == curl ]] && return 18 || return 4
 }
 
 is_route_failure() {
   local tool="$1" status="$2"
   case "$tool:$status" in
     curl:5|curl:6|curl:7|curl:16|curl:18|curl:22|curl:28|curl:35|curl:47|curl:52|curl:55|curl:56|curl:60|curl:92|\
-    wget:4|wget:5|wget:8|curl:153|wget:153) return 0 ;;
+    wget:4|wget:5|wget:8|curl:125|curl:153|wget:125|wget:153) return 0 ;;
     *) return 1 ;;
   esac
 }
