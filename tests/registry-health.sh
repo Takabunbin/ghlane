@@ -67,74 +67,117 @@ chmod +x "$TMP/fake-curl"
 
 printf '%s\n' \
   'https://good1.example' \
-  'https://bad.example' \
   'https://dead.example' \
-  'http://invalid.example' \
-  'https://good2.example' >"$TMP/source.txt"
+  'https://bad.example' >"$TMP/stable.txt"
+
+printf '%s\n' \
+  'https://good1.example' \
+  'https://dead.example' \
+  'https://bad.example' \
+  'https://good2.example' \
+  'https://good3.example' \
+  'https://good4.example' \
+  'https://good5.example' >"$TMP/source.txt"
 
 printf '%s\n' \
   '# ghlane-registry-v1' \
-  'https://bad.example' \
-  'https://dead.example' >"$TMP/previous.txt"
+  'https://good1.example' \
+  'https://dead.example' \
+  'https://good3.example' >"$TMP/previous-v1.txt"
+
+printf '%s\n' \
+  'https://good1.example' \
+  'https://dead.example' >"$TMP/previous-legacy.txt"
 
 if CURL_BIN="$TMP/fake-curl" \
    SOURCE_FILE="$TMP/source.txt" \
-   PREVIOUS_FILE="$TMP/previous.txt" \
+   STABLE_FILE="$TMP/stable.txt" \
+   PREVIOUS_FILE="$TMP/previous-v1.txt" \
+   LEGACY_PREVIOUS_FILE="$TMP/previous-legacy.txt" \
    OUTPUT_FILE="$TMP/registry-v1.txt" \
    LEGACY_OUTPUT_FILE="$TMP/registry.txt" \
+   MAX_MIRRORS=5 \
+   STABLE_SLOTS=2 \
    bash "$BUILDER" >/dev/null 2>&1
 then
-  expected=$'# ghlane-registry-v1\nhttps://good1.example\nhttps://dead.example\nhttps://good2.example'
-  legacy=$'https://good1.example\nhttps://dead.example\nhttps://good2.example'
-  if [[ "$(cat "$TMP/registry-v1.txt")" == "$expected" &&
-        "$(cat "$TMP/registry.txt")" == "$legacy" ]]; then
-    pass 'verified mirrors publish; runner-only failure may retain; mismatch/invalid are rejected'
+  v1_count=$(grep -c '^https://' "$TMP/registry-v1.txt" || true)
+  if grep -Fxq '# ghlane-registry-v1' "$TMP/registry-v1.txt" &&
+     grep -Fxq 'https://good1.example' "$TMP/registry-v1.txt" &&
+     grep -Fxq 'https://dead.example' "$TMP/registry-v1.txt" &&
+     grep -Eq '^https://good[2345]\.example$' "$TMP/registry-v1.txt" &&
+     ! grep -Fxq 'https://bad.example' "$TMP/registry-v1.txt" &&
+     [[ "$v1_count" -eq 5 ]] &&
+     [[ "$(cat "$TMP/registry.txt")" == $'https://good1.example\nhttps://dead.example' ]]
+  then
+    pass 'v1 admits verified discoveries while legacy stays manual-only'
   else
-    fail 'verified mirrors publish; runner-only failure may retain; mismatch/invalid are rejected'
+    fail 'v1 admits verified discoveries while legacy stays manual-only'
   fi
 else
-  fail 'verified mirrors publish; runner-only failure may retain; mismatch/invalid are rejected'
+  fail 'v1 admits verified discoveries while legacy stays manual-only'
 fi
 
-printf 'https://newdead.example\n' >"$TMP/newdead.txt"
-printf '# ghlane-registry-v1\n' >"$TMP/empty-previous.txt"
+printf '%s\n' 'https://newdead.example' >"$TMP/newdead-source.txt"
+: >"$TMP/no-stable.txt"
+printf '# ghlane-registry-v1\n' >"$TMP/empty-v1.txt"
+: >"$TMP/empty-legacy.txt"
+
 if CURL_BIN="$TMP/fake-curl" \
-   SOURCE_FILE="$TMP/newdead.txt" \
-   PREVIOUS_FILE="$TMP/empty-previous.txt" \
-   OUTPUT_FILE="$TMP/newdead-registry.txt" \
+   SOURCE_FILE="$TMP/newdead-source.txt" \
+   STABLE_FILE="$TMP/no-stable.txt" \
+   PREVIOUS_FILE="$TMP/empty-v1.txt" \
+   LEGACY_PREVIOUS_FILE="$TMP/empty-legacy.txt" \
+   OUTPUT_FILE="$TMP/newdead-v1.txt" \
+   LEGACY_OUTPUT_FILE="$TMP/newdead-legacy.txt" \
    bash "$BUILDER" >/dev/null 2>&1 &&
-   [[ "$(cat "$TMP/newdead-registry.txt")" == '# ghlane-registry-v1' ]]
+   [[ "$(cat "$TMP/newdead-v1.txt")" == '# ghlane-registry-v1' ]] &&
+   [[ ! -s "$TMP/newdead-legacy.txt" ]]
 then
-  pass 'new runner-unreachable endpoint is not promoted'
+  pass 'new runner-unreachable discovery is not promoted'
 else
-  fail 'new runner-unreachable endpoint is not promoted'
+  fail 'new runner-unreachable discovery is not promoted'
 fi
 
-printf '%s\n' 'https://bad.example' >"$TMP/bad-only.txt"
+printf 'https://bad.example\n' >"$TMP/bad-source.txt"
+printf 'https://bad.example\n' >"$TMP/bad-stable.txt"
+printf '# ghlane-registry-v1\nhttps://bad.example\n' >"$TMP/bad-previous-v1.txt"
+printf 'https://bad.example\n' >"$TMP/bad-previous-legacy.txt"
+
 if CURL_BIN="$TMP/fake-curl" \
-   SOURCE_FILE="$TMP/bad-only.txt" \
-   PREVIOUS_FILE="$TMP/previous.txt" \
-   OUTPUT_FILE="$TMP/bad-only-registry.txt" \
+   SOURCE_FILE="$TMP/bad-source.txt" \
+   STABLE_FILE="$TMP/bad-stable.txt" \
+   PREVIOUS_FILE="$TMP/bad-previous-v1.txt" \
+   LEGACY_PREVIOUS_FILE="$TMP/bad-previous-legacy.txt" \
+   OUTPUT_FILE="$TMP/bad-v1.txt" \
+   LEGACY_OUTPUT_FILE="$TMP/bad-legacy.txt" \
    bash "$BUILDER" >/dev/null 2>&1 &&
-   [[ "$(cat "$TMP/bad-only-registry.txt")" == '# ghlane-registry-v1' ]]
+   [[ "$(cat "$TMP/bad-v1.txt")" == '# ghlane-registry-v1' ]] &&
+   [[ ! -s "$TMP/bad-legacy.txt" ]]
 then
-  pass 'content mismatch is never retained from previous registry'
+  pass 'content mismatch is hard-rejected from both registries'
 else
-  fail 'content mismatch is never retained from previous registry'
+  fail 'content mismatch is hard-rejected from both registries'
 fi
 
-printf '%s\n' 'https://good1.example' 'https://good2.example' >"$TMP/cap.txt"
+printf '%s\n' 'https://good1.example' 'https://good2.example' >"$TMP/cap-source.txt"
+printf 'https://good1.example\n' >"$TMP/cap-stable.txt"
+
 if CURL_BIN="$TMP/fake-curl" \
-   SOURCE_FILE="$TMP/cap.txt" \
-   PREVIOUS_FILE="$TMP/empty-previous.txt" \
-   OUTPUT_FILE="$TMP/capped.txt" \
+   SOURCE_FILE="$TMP/cap-source.txt" \
+   STABLE_FILE="$TMP/cap-stable.txt" \
+   PREVIOUS_FILE="$TMP/empty-v1.txt" \
+   LEGACY_PREVIOUS_FILE="$TMP/empty-legacy.txt" \
+   OUTPUT_FILE="$TMP/capped-v1.txt" \
+   LEGACY_OUTPUT_FILE="$TMP/capped-legacy.txt" \
    MAX_MIRRORS=1 \
+   STABLE_SLOTS=1 \
    bash "$BUILDER" >/dev/null 2>&1 &&
-   [[ "$(grep -c '^https://' "$TMP/capped.txt")" -eq 1 ]]
+   [[ "$(grep -c '^https://' "$TMP/capped-v1.txt")" -eq 1 ]] &&
+   [[ "$(cat "$TMP/capped-legacy.txt")" == 'https://good1.example' ]]
 then
-  pass 'production registry cap is enforced'
+  pass 'v1 and legacy publication caps are enforced'
 else
-  fail 'production registry cap is enforced'
+  fail 'v1 and legacy publication caps are enforced'
 fi
 
 printf '========================================\n'
