@@ -53,7 +53,7 @@ case_missing_wget() {
   reset_system
   apt-get purge -y wget >/dev/null 2>&1 || true
   run_install >/dev/null
-  test "$(ghlane version)" = "ghlane 0.2.0"
+  test "$(ghlane version)" = "ghlane 0.2.1"
   test "$(readlink -f /usr/local/bin/curl)" = "/usr/local/libexec/ghlane"
   test ! -e /usr/local/bin/wget
 }
@@ -61,7 +61,7 @@ case_missing_wget() {
 case_fresh() {
   reset_system
   run_install >/dev/null
-  test "$(ghlane version)" = "ghlane 0.2.0"
+  test "$(ghlane version)" = "ghlane 0.2.1"
   test "$(readlink -f /usr/local/bin/curl)" = "/usr/local/libexec/ghlane"
   test "$(readlink -f /usr/local/bin/wget)" = "/usr/local/libexec/ghlane"
   test "$(readlink -f /usr/local/bin/ghlane)" = "/usr/local/libexec/ghlane"
@@ -90,7 +90,7 @@ case_custom_curl() {
   run_install >/dev/null 2>&1
   test "$before" = "$(sha256sum /usr/local/bin/curl)"
   test ! -L /usr/local/bin/curl
-  test "$(ghlane version)" = "ghlane 0.2.0"
+  test "$(ghlane version)" = "ghlane 0.2.1"
 }
 
 case_custom_wget() {
@@ -103,7 +103,7 @@ case_custom_wget() {
   run_install >/dev/null 2>&1
   test "$before" = "$(sha256sum /usr/local/bin/wget)"
   test ! -L /usr/local/bin/wget
-  test "$(ghlane version)" = "ghlane 0.2.0"
+  test "$(ghlane version)" = "ghlane 0.2.1"
 }
 
 case_bad_upgrade() {
@@ -176,7 +176,60 @@ case_reinstall_after_uninstall() {
   run_install >/dev/null
   run_uninstall >/dev/null
   run_install >/dev/null
-  test "$(ghlane version)" = "ghlane 0.2.0"
+  test "$(ghlane version)" = "ghlane 0.2.1"
+  ghlane self-test >/dev/null
+}
+
+case_preserve_custom_config() {
+  reset_system
+  run_install >/dev/null
+
+  cat >/etc/ghlane.conf <<'EOF'
+REAL_CURL='/usr/bin/curl'
+REAL_WGET='/usr/bin/wget'
+MIRROR_FILE='/etc/ghlane/mirrors.txt'
+BEST_TTL='777'
+REGISTRY_URL=''
+REGISTRY_TTL='12345'
+REGISTRY_MAX='3'
+REGISTRY_TIMEOUT='9'
+EOF
+
+  local before after
+  before=$(sha256sum /etc/ghlane.conf)
+  run_install >/dev/null
+  after=$(sha256sum /etc/ghlane.conf)
+
+  test "$before" = "$after"
+  test "$(ghlane version)" = "ghlane 0.2.1"
+}
+
+case_migrate_default_registry_url() {
+  reset_system
+  run_install >/dev/null
+
+  sed -i "s|registry-v1.txt|registry.txt|" /etc/ghlane.conf
+  run_install >/dev/null
+
+  grep -Fxq "REGISTRY_URL='https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt'" /etc/ghlane.conf
+}
+
+case_interrupted_upgrade_keeps_old_core_working() {
+  reset_system
+  run_install >/dev/null
+
+  local before interrupted
+  before=$(sha256sum /usr/local/libexec/ghlane)
+
+  interrupted="$TMP/interrupted-install.sh"
+  cp "$TMP/install.sh" "$interrupted"
+  sed -i '/install -m 0755 "\$tmp\/ghlane" "\$core_new"/i\false' "$interrupted"
+
+  if bash "$interrupted" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  test "$before" = "$(sha256sum /usr/local/libexec/ghlane)"
   ghlane self-test >/dev/null
 }
 
@@ -187,7 +240,7 @@ case_nonroot_sudo() {
   chmod 0440 /etc/sudoers.d/ghlane-test
 
   sudo -u ghlane-test -H env PATH=/usr/local/bin:/usr/bin:/bin bash "$TMP/install.sh" >/dev/null
-  test "$(ghlane version)" = "ghlane 0.2.0"
+  test "$(ghlane version)" = "ghlane 0.2.1"
   ghlane self-test >/dev/null
 
   sudo -u ghlane-test -H env PATH=/usr/local/bin:/usr/bin:/bin bash "$TMP/uninstall.sh" >/dev/null
@@ -214,6 +267,9 @@ run_case 'repeat install is idempotent' case_reinstall
 run_case 'custom /usr/local/bin/curl is preserved' case_custom_curl
 run_case 'custom /usr/local/bin/wget is preserved' case_custom_wget
 run_case 'bad upgrade leaves working install untouched' case_bad_upgrade
+run_case 'reinstall preserves custom config' case_preserve_custom_config
+run_case 'old default registry URL migrates to registry-v1' case_migrate_default_registry_url
+run_case 'interrupted upgrade before core switch keeps old core working' case_interrupted_upgrade_keeps_old_core_working
 run_case 'safe uninstall removes only ghlane files' case_uninstall
 run_case 'repeat uninstall is idempotent' case_uninstall_idempotent
 run_case 'custom curl/wget survive uninstall' case_custom_survives_uninstall
