@@ -54,25 +54,25 @@ args_are_safe() {
       curl:--progress-bar|curl:--globoff|curl:--no-buffer|curl:--remote-time|\
       curl:--retry-all-errors|curl:--retry-connrefused|curl:--remove-on-error|\
       wget:--quiet|wget:--no-verbose|wget:--continue|wget:--show-progress|\
-      wget:--no-clobber)
+      wget:--show-progress)
         continue
         ;;
-      curl:--output|curl:--continue-at|curl:--retry|curl:--retry-delay|\
+      curl:--output|curl:--retry|curl:--retry-delay|\
       curl:--retry-max-time|curl:--max-time|curl:--connect-timeout|\
       curl:--speed-limit|curl:--speed-time|curl:--limit-rate|\
-      curl:--max-filesize|curl:--range|curl:--output-dir|\
-      wget:--output-document|wget:--directory-prefix|wget:--tries|\
+      curl:--max-filesize|\
+      wget:--output-document|wget:--tries|\
       wget:--timeout|wget:--connect-timeout|wget:--read-timeout|\
       wget:--dns-timeout|wget:--wait|wget:--waitretry|wget:--limit-rate|\
       wget:--progress|wget:--retry-on-http-error)
         needs_value=1
         continue
         ;;
-      curl:--output=*|curl:--continue-at=*|curl:--retry=*|curl:--retry-delay=*|\
+      curl:--output=*|curl:--retry=*|curl:--retry-delay=*|\
       curl:--retry-max-time=*|curl:--max-time=*|curl:--connect-timeout=*|\
       curl:--speed-limit=*|curl:--speed-time=*|curl:--limit-rate=*|\
-      curl:--max-filesize=*|curl:--range=*|curl:--output-dir=*|\
-      wget:--output-document=*|wget:--directory-prefix=*|wget:--tries=*|\
+      curl:--max-filesize=*|\
+      wget:--output-document=*|wget:--tries=*|\
       wget:--timeout=*|wget:--connect-timeout=*|wget:--read-timeout=*|\
       wget:--dns-timeout=*|wget:--wait=*|wget:--waitretry=*|wget:--limit-rate=*|\
       wget:--progress=*|wget:--retry-on-http-error=*)
@@ -91,7 +91,7 @@ args_are_safe() {
           ch="${short:i:1}"
           case "$ch" in
             f|s|S|L|O|J|N|R|g|q) ;;
-            o|C)
+            o)
               if (( i + 1 == ${#short} )); then
                 needs_value=1
               fi
@@ -106,7 +106,7 @@ args_are_safe() {
         for ((i=0; i<${#short}; i++)); do
           ch="${short:i:1}"
           case "$ch" in
-            q|c) ;;
+            q) ;;
             O|P|t|T)
               if (( i + 1 == ${#short} )); then
                 needs_value=1
