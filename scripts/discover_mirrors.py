@@ -106,7 +106,8 @@ def fetch_bytes(url: str, token: str | None = None, timeout: int = 15) -> bytes:
         "User-Agent": "ghlane-mirror-discovery/0.2",
         "Accept": "application/vnd.github+json",
     }
-    if token:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if token and host == "api.github.com":
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -190,6 +191,7 @@ def main() -> int:
     parser.add_argument("--report")
     parser.add_argument("--denylist", default="denylist.txt")
     parser.add_argument("--hint-quorum", type=int, default=2)
+    parser.add_argument("--per-source-cap", type=int, default=32)
     parser.add_argument("--max-candidates", type=int, default=128)
     args = parser.parse_args()
 
@@ -207,21 +209,33 @@ def main() -> int:
         accepted.setdefault(url, None)
         provenance[url].append({"source": source, "trust": trust})
 
-    for label, path in (("manual seed", Path(args.seed)), ("current registry", Path(args.current))):
-        urls = read_urls_file(path)
-        for url in urls:
-            accept(url, label, "first_party")
-        source_results.append({"name": label, "trust": "first_party", "count": len(urls), "ok": True})
+    seed_urls = read_urls_file(Path(args.seed))
+    for url in seed_urls:
+        accept(url, "manual seed", "first_party")
+    source_results.append({"name": "manual seed", "trust": "first_party", "count": len(seed_urls), "ok": True})
+
+    incumbent_urls = read_urls_file(Path(args.current))
+    for url in incumbent_urls:
+        provenance[url].append({"source": "current registry", "trust": "incumbent"})
+    source_results.append({"name": "current registry", "trust": "incumbent", "count": len(incumbent_urls), "ok": True})
 
     for source in source_defs:
         name = source["name"]
         trust = source.get("trust", "hint")
         try:
-            urls = discover_source(source, token)
-            source_results.append({"name": name, "trust": trust, "count": len(urls), "ok": True})
+            discovered = discover_source(source, token)
+            urls = discovered[: args.per_source_cap]
+            source_results.append({
+                "name": name,
+                "trust": trust,
+                "count": len(urls),
+                "discovered": len(discovered),
+                "truncated": max(0, len(discovered) - len(urls)),
+                "ok": True,
+            })
         except Exception as exc:
             print(f"WARN  source failed: {name}: {exc}", file=sys.stderr)
-            source_results.append({"name": name, "trust": trust, "count": 0, "ok": False})
+            source_results.append({"name": name, "trust": trust, "count": 0, "discovered": 0, "truncated": 0, "ok": False})
             continue
         for url in urls:
             if url in denied:
@@ -238,19 +252,17 @@ def main() -> int:
         if url not in denied and len(names) >= args.hint_quorum:
             accepted.setdefault(url, None)
 
-    candidates = list(accepted)
-    if len(candidates) > args.max_candidates:
-        print(
-            f"discovery: {len(candidates)} accepted candidates exceeds cap {args.max_candidates}",
-            file=sys.stderr,
-        )
-        return 2
+    candidates_all = list(accepted)
+    candidates = candidates_all[: args.max_candidates]
+    dropped_by_cap = max(0, len(candidates_all) - len(candidates))
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("".join(f"{url}\n" for url in candidates), encoding="utf-8")
     report = {
         "candidate_count": len(candidates),
+        "candidate_count_before_cap": len(candidates_all),
+        "dropped_by_cap": dropped_by_cap,
         "denylist_count": len(denied),
         "hint_quorum": args.hint_quorum,
         "candidates": [
@@ -270,7 +282,7 @@ def main() -> int:
         state = "OK" if result["ok"] else "FAIL"
         print(f"{state:4}  {result['name']}: {result['count']}")
     print(f"denylisted endpoints: {len(denied)}")
-    print(f"accepted candidates: {len(candidates)}")
+    print(f"accepted candidates: {len(candidates)} (dropped_by_cap={dropped_by_cap})")
     for url in candidates:
         print(f"CAND  {url}")
     return 0
