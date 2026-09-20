@@ -383,7 +383,7 @@ save_candidate() {
 }
 
 race_candidates() {
-  local url="$1" tmpdir candidate target stats speed content_type http_code size_download rc i=0 best
+  local url="$1" report_file="${2:-}" tmpdir candidate target stats speed content_type http_code size_download rc i=0 best
   tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane.XXXXXX") || return 1
 
   # ponytail: each candidate gets the same 2s budget. A max-time timeout is
@@ -418,10 +418,48 @@ race_candidates() {
   done < <(printf 'DIRECT\n'; mirror_source)
   wait
 
+  if [[ -n "$report_file" ]]; then
+    cat "$tmpdir"/* 2>/dev/null >"$report_file" || true
+  fi
+
   best=$(cat "$tmpdir"/* 2>/dev/null | awk -F '\t' '$1+0 > best+0 {best=$1; line=$2} END {if (line) print line}')
   rm -rf "$tmpdir"
   [[ -n "$best" ]] || return 1
   printf '%s\n' "$best"
+}
+
+format_speed() {
+  awk -v bytes="$1" 'BEGIN {
+    if (bytes <= 0) { print "unavailable"; exit }
+    if (bytes >= 1048576) { printf "%.2f MiB/s", bytes / 1048576; exit }
+    if (bytes >= 1024) { printf "%.0f KiB/s", bytes / 1024; exit }
+    printf "%.0f B/s", bytes
+  }'
+}
+
+benchmark_routes() {
+  local url="$1" report best speed candidate label mark tab
+  is_accelerable_url "$url" || { log "benchmark requires a public GitHub Release asset URL"; return 2; }
+  [[ "$url" != *\?* && "$url" != *\#* ]] || { log "benchmark URL must not contain query or fragment"; return 2; }
+
+  maybe_refresh_registry
+  report=$(mktemp "${TMPDIR:-/tmp}/ghlane-benchmark.XXXXXX") || return 1
+  best=$(race_candidates "$url" "$report") || {
+    rm -f "$report"
+    log "no usable route found"
+    return 1
+  }
+
+  tab=$(printf "\t")
+  printf "%-28s %14s %s\n" "ROUTE" "SPEED" "RESULT"
+  while IFS="$tab" read -r speed candidate; do
+    [[ -n "$candidate" ]] || continue
+    label=$(candidate_label "$candidate")
+    mark=""
+    [[ "$candidate" == "$best" ]] && mark="selected"
+    printf "%-28s %14s %s\n" "$label" "$(format_speed "$speed")" "$mark"
+  done <"$report"
+  rm -f "$report"
 }
 
 select_candidate() {
@@ -781,6 +819,10 @@ cli() {
     --version|-V|version) printf 'ghlane %s\n' "$VERSION" ;;
     self-test) self_test ;;
     mirrors) printf 'DIRECT\n'; mirror_source ;;
+    benchmark)
+      [[ -n "${2:-}" ]] || { printf "Usage: ghlane benchmark <github-release-url>\n" >&2; return 2; }
+      benchmark_routes "$2"
+      ;;
     refresh)
       if refresh_registry; then
         rm -f "$CACHE_DIR/best" 2>/dev/null || true
@@ -810,7 +852,7 @@ cli() {
       fi
       ;;
     *)
-      printf 'Usage: ghlane {status|mirrors|refresh|self-test|version}\n' >&2
+      printf 'Usage: ghlane {status|mirrors|benchmark|refresh|self-test|version}\n' >&2
       return 2
       ;;
   esac
