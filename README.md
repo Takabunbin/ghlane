@@ -1,24 +1,28 @@
 # ghlane
 
-**Linux 上的 GitHub Release 透明加速器**
+**给中国大陆 Linux 主机 / VPS 加速 GitHub Release 下载**
 
 [![CI](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml/badge.svg)](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml)
 [![Version](https://img.shields.io/badge/version-0.2.1-0969da)](https://github.com/Takabunbin/ghlane)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](https://github.com/Takabunbin/ghlane)
 [![License](https://img.shields.io/github/license/Takabunbin/ghlane)](LICENSE)
 
-继续使用原来的 `curl` 和 `wget`。ghlane 在本机比较 GitHub DIRECT 与可用镜像，选择当前更快的线路，并用 GitHub Release 提供的 SHA-256 和文件大小检查最终文件。
+当 Linux 服务器直连 GitHub Release 较慢或不稳定时，ghlane 会在**这台机器上**比较 GitHub DIRECT 和多个可用镜像，选择本轮测速更快的线路。
 
-```console
-$ curl -fL \
-  https://github.com/komari-monitor/komari/releases/download/1.5.0-fix1/komari-linux-amd64 \
-  -o komari-linux-amd64
+装好以后：
 
-[ghlane] selected gh-proxy.com
-100 42.6M  100 42.6M    0     0  13.6M      0  0:00:03  0:00:03 --:--:-- 13.6M
+- 不改 GitHub 下载链接
+- 不记镜像前缀
+- 不运行后台守护进程
+- 继续使用原来的 `curl` 和 `wget`
+
+ghlane 当前只处理公开的 GitHub Release 文件：
+
+```text
+https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
 ```
 
-上面的速度来自一次真实链路验收。实际速度取决于本机网络、GitHub 可达性和镜像状态，ghlane 会在你的机器上重新测速。
+它不加速 `git clone`、GitHub API、Raw 文件、archive/codeload 或私有 Release，也不修改系统代理。
 
 ## 安装
 
@@ -26,15 +30,13 @@ $ curl -fL \
 curl -fsSL https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/install.sh | bash
 ```
 
-安装器会先把当前 `main` 解析成具体 commit，再从这个 commit 下载安装文件。非 root 用户需要系统提供 `sudo`。
+安装器会先把当前 `main` 解析成具体 commit，再下载安装文件。非 root 用户需要系统提供 `sudo`。
 
-安装后检查：
+检查状态：
 
 ```bash
 ghlane status
 ```
-
-输出类似：
 
 ```text
 ghlane 0.2.1
@@ -44,6 +46,43 @@ mirrors fallback: /etc/ghlane/mirrors.txt
 registry: https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt
 registry cache: fresh
 cached route: gh-proxy.com
+```
+
+## 它到底比较了哪些线路
+
+正常下载时，ghlane 只打印最终选择，避免每次 `curl` 都输出整张测速表：
+
+```console
+$ curl -fL   https://github.com/komari-monitor/komari/releases/download/1.5.0-fix1/komari-linux-amd64   -o komari-linux-amd64
+
+[ghlane] selected gh-proxy.com
+100 42.6M  100 42.6M    0     0  13.6M      0  0:00:03  0:00:03 --:--:-- 13.6M
+```
+
+这段 13.6 MiB/s 来自一次真实下载验收，但它只说明**最终下载速度**，不能单独证明其他线路更慢。
+
+要看完整对比，直接跑：
+
+```bash
+ghlane benchmark   https://github.com/komari-monitor/komari/releases/download/1.5.0-fix1/komari-linux-amd64
+```
+
+`benchmark` 会用同一个 Release URL 测试 DIRECT 和当前所有候选，并列出每条线路的本机结果：
+
+```text
+ROUTE                                 SPEED RESULT
+<route 1>                         <speed>
+<route 2>                         <speed> selected
+<route 3>                    unavailable
+...
+```
+
+这里不把某次测速数字写死在 README 里，因为 VPS、运营商、时间和镜像状态都会改变结果。你看到的 `selected` 来自当前机器这一轮实测。
+
+查看当前候选：
+
+```bash
+ghlane mirrors
 ```
 
 ## 使用
@@ -60,66 +99,80 @@ curl -fL   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -o FILE
 wget   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -O FILE
 ```
 
-不需要记镜像前缀，也不需要换一套下载命令。ghlane 只接管符合安全条件的 GitHub Release 下载，其他调用交给系统 `curl` 或 `wget`。
+不需要把 URL 手动改成：
+
+```text
+https://某个镜像/https://github.com/...
+```
+
+符合条件的 Release 下载由 ghlane 选路；无法确认安全语义的调用原样交给系统 `curl` 或 `wget`。
 
 ## 工作方式
 
 ```mermaid
 flowchart TD
-    A["curl / wget 请求"] --> B{"公开 GitHub Release<br/>安全参数与输出路径"}
-    B -- "条件不满足" --> D["系统 curl / wget<br/>直接执行"]
-    B -- "条件满足" --> M["读取 registry-v1<br/>和本地 fallback"]
-    M --> R["DIRECT + 候选镜像<br/>本机测速"]
-    R --> F["选择当前更快的线路"]
-    F --> T["下载到目标目录中的临时文件"]
-    T --> V{"SHA-256 + 文件大小<br/>校验结果"}
-    V -- "一致" --> O["提交为目标文件"]
-    V -- "不一致" --> X["丢弃镜像结果"]
+    A["curl / wget<br/>GitHub Release URL"] --> B{"可以安全接管"}
+    B -- "否" --> D["系统 curl / wget<br/>DIRECT"]
+    B -- "是" --> M["DIRECT + registry 镜像"]
+    M --> R["当前机器并发测速"]
+    R --> F["选择本轮更快线路"]
+    F --> T["下载到临时文件"]
+    T --> V{"GitHub SHA-256 + size"}
+    V -- "一致" --> O["提交目标文件"]
+    V -- "不一致 / 下载失败" --> X["丢弃镜像结果"]
     X --> G["GitHub DIRECT 重试"]
-    G --> W{"DIRECT 校验结果"}
+    G --> W{"再次校验"}
     W -- "一致" --> O
-    W -- "不一致" --> E["返回下载错误"]
+    W -- "失败" --> E["返回下载错误"]
 ```
 
-客户端默认缓存一次选路结果 1 小时，远程 registry 默认缓存 24 小时。冷启动时，DIRECT 和候选镜像进入同一测速流程。
+测速发生在客户端。不同 VPS、运营商或时间段可能选出不同线路。
 
-### Registry 更新
+客户端默认缓存选路结果 1 小时，远程 registry 默认缓存 24 小时。需要刷新候选并让下一次下载重新选路：
+
+```bash
+ghlane refresh
+```
+
+## 镜像从哪里来
 
 ```mermaid
 flowchart LR
     S["人工种子与社区来源"] --> Q["候选发现"]
     Q --> C["隔离候选"]
-    C --> H["GitHub Actions<br/>Release canary 校验"]
+    C --> H["GitHub Actions<br/>Release canary 检查"]
     H --> P["registry-v1"]
-    P --> L["客户端本地测速"]
+    P --> L["你的服务器<br/>本地测速"]
 ```
 
-发现任务只收集候选。中央任务用固定 GitHub Release 样本检查协议和内容，再生成带版本头的 `registry-v1`。客户端仍会校验每个实际下载文件。
+仓库定期收集候选镜像并做中央健康检查。通过检查的节点才有资格进入 `registry-v1`。
 
-当前协议：
+中央检查只负责筛掉明显不可用或返回错误内容的候选，**不负责判断你这台机器哪条最快**。最终速度比较仍在客户端完成。
+
+registry 格式：
 
 ```text
 # ghlane-registry-v1
 https://mirror.example
 ```
 
-registry 无法刷新时，ghlane 会继续使用可用缓存；没有可用缓存时，会回退到安装时的镜像列表和 DIRECT。
+registry 刷新失败时，ghlane 会继续使用可用缓存；没有可用缓存时回退到安装时的镜像列表和 DIRECT。
 
-## 安全边界
+## 下载完整性
 
 **ghlane 不信任镜像返回的文件内容。**
 
-镜像只负责传输。文件能否交给调用者，由 GitHub Releases API 返回的资产 `digest` 和 `size` 决定。
+镜像只负责传输。最终文件需要和 GitHub Releases API 返回的资产 `digest` 与 `size` 一致。
 
-一次加速下载需要同时满足：
+加速需要同时满足：
 
-1. URL 指向公开的 `github.com/.../releases/download/...` 文件。
-2. `curl` 或 `wget` 参数属于 ghlane 已审查的安全集合。
+1. URL 是公开的 GitHub Release asset。
+2. `curl` / `wget` 参数属于已支持的安全集合。
 3. 命令指定一个尚不存在的输出文件。
-4. GitHub Releases API 返回该文件的 SHA-256 和文件大小。
-5. 下载结果与 GitHub 元数据一致。
+4. GitHub Releases API 提供 SHA-256 和文件大小。
+5. 完整下载结果通过校验。
 
-ghlane 先把数据写入目标目录中的临时文件。校验通过后再提交为目标文件。镜像返回错误内容、超大响应或下载错误时，临时文件会被丢弃，并尝试 GitHub DIRECT。
+镜像返回错误文件、异常大响应或下载失败时，临时文件不会交给调用者，ghlane 会尝试 GitHub DIRECT。
 
 这些情况直接绕过镜像：
 
@@ -134,31 +187,18 @@ ghlane 先把数据写入目标目录中的临时文件。校验通过后再提�
 | GitHub 没有提供可验证的 Release digest | DIRECT |
 | Python 3 或 SHA-256 工具不可用 | DIRECT |
 
-更完整的说明见 [SECURITY.md](SECURITY.md)。
+详细安全模型见 [SECURITY.md](SECURITY.md)。
 
-## 支持范围
+## 适合谁
 
-ghlane 当前处理：
+- 中国大陆 Linux VPS、云服务器或主机，GitHub Release 直连较慢或容易超时
+- 安装脚本经常从 GitHub Releases 拉二进制文件
+- 不想自己找镜像站、手工改 URL 或长期固定一个镜像
+- 有多台服务器，希望每台机器按自己的网络单独选路
 
-```text
-https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
-```
+如果需求是 `git clone`、Raw、GitHub API、私有 Release，ghlane 当前不处理。
 
-这些请求不会进入镜像选路：
-
-- GitHub API
-- `raw.githubusercontent.com`
-- repository archive / codeload
-- `git clone`、fetch、push
-- 私有 Release
-- 带 query 或 fragment 的 Release URL
-- ghlane 无法确认语义安全的 curl / wget 调用
-
-ghlane 对这些请求不改写 URL。
-
-### 已验证系统
-
-CI 会在以下系统执行安装、重装、卸载和回归测试：
+## 已验证系统
 
 | 系统 | CI |
 | --- | --- |
@@ -175,6 +215,7 @@ CI 会在以下系统执行安装、重装、卸载和回归测试：
 | --- | --- |
 | `ghlane status` | 查看后端、registry 状态和缓存线路 |
 | `ghlane mirrors` | 查看 DIRECT 与当前候选镜像 |
+| `ghlane benchmark URL` | 对同一个 Release URL 测试 DIRECT 与全部候选 |
 | `ghlane refresh` | 刷新 `registry-v1` 并清除选路缓存 |
 | `ghlane self-test` | 检查核心规则和本地安全前提 |
 | `ghlane version` | 输出当前版本 |
@@ -185,8 +226,6 @@ CI 会在以下系统执行安装、重装、卸载和回归测试：
 GHLANE_BYPASS=1 curl -fL URL -o FILE
 ```
 
-这个环境变量只影响当前命令。
-
 ## 配置
 
 安装器写入：
@@ -194,8 +233,6 @@ GHLANE_BYPASS=1 curl -fL URL -o FILE
 ```text
 /etc/ghlane.conf
 ```
-
-常用配置：
 
 | 变量 | 默认值 | 作用 |
 | --- | ---: | --- |
@@ -217,7 +254,7 @@ REGISTRY_URL=''
 
 关闭后仍可使用本地 fallback 和 DIRECT。
 
-重新安装会保留已有配置，并迁移旧版官方 registry URL。安装器不会覆盖用户已有的 `/usr/local/bin/curl` 或 `/usr/local/bin/wget`。
+重新安装会保留已有配置，并迁移旧版官方 registry URL。安装器不会覆盖已有的 `/usr/local/bin/curl` 或 `/usr/local/bin/wget`。
 
 <details>
 <summary>安装后的文件</summary>
@@ -245,30 +282,24 @@ curl -fsSL https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/uninstall.sh | bas
 
 ## 开发与测试
 
-项目使用 ShellCheck、故障注入测试、registry 测试和四套发行版安装矩阵。GitHub Actions 会在 push 和 pull request 上运行这些检查。
-
-本地快速检查：
-
 ```bash
 bash -n ghlane install.sh uninstall.sh
 shellcheck ghlane install.sh uninstall.sh scripts/build-registry.sh
 ./ghlane self-test
-```
 
-完整回归测试：
-
-```bash
 bash tests/fault-injection.sh
 bash tests/registry.sh
 bash tests/registry-health.sh
 python3 tests/discovery.py
 ```
 
+GitHub Actions 还会在 Debian 12/13、Ubuntu 24.04/26.04 上跑安装生命周期测试。
+
 ## 设计取舍
 
-ghlane 只加速自己能验证命令语义和文件完整性的请求。无法确认时，原始命令交给 DIRECT。
+ghlane 只加速自己能确认命令语义、并能校验最终文件的请求。条件不满足时使用 DIRECT。
 
-客户端不运行 daemon 或 cron。registry 维护由仓库的 GitHub Actions 执行，用户机器只在需要下载时工作。
+客户端没有 daemon 或 cron。registry 维护由仓库的 GitHub Actions 执行，用户机器只在实际下载时工作。
 
 ## 许可证
 

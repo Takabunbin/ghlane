@@ -277,6 +277,17 @@ printf '%s\n%s\n' 'https://fast.example' 'https://fast.example' >"$MIRRORS"
 run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
 expect_route 'duplicate mirror entries do not break selection' 'https://fast.example'
 
+reset
+printf '%s\n%s\n' 'https://slow.example' 'https://fast.example' >"$MIRRORS"
+bench=$(env GHLANE_CONFIG="$CONF" GHLANE_CACHE_DIR="$TMP/cache" FAKE_LOG="$LOG" "$CORE" benchmark "$URL" 2>/dev/null)
+if printf '%s\n' "$bench" | grep -Eq '^fast\.example[[:space:]]+4\.77 MiB/s[[:space:]]+selected$' &&
+   printf '%s\n' "$bench" | grep -Eq '^slow\.example[[:space:]]+293 KiB/s' &&
+   printf '%s\n' "$bench" | grep -Eq '^direct[[:space:]]+98 KiB/s'; then
+  pass 'benchmark reports all routes and marks the fastest sample'
+else
+  fail 'benchmark reports all routes and marks the fastest sample'
+fi
+
 printf '\n--- C. cache corruption / persistence ---\n'
 reset
 printf '%s\n' 'https://good.example' >"$MIRRORS"
