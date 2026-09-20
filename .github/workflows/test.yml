@@ -24,7 +24,7 @@ jobs:
           shellcheck -S warning ghlane install.sh uninstall.sh scripts/build-registry.sh tests/fault-injection.sh tests/installer-matrix.sh tests/registry.sh tests/registry-health.sh
           chmod +x ghlane tests/fault-injection.sh tests/installer-matrix.sh tests/registry.sh scripts/build-registry.sh tests/registry-health.sh
           ./ghlane self-test
-          test "$(./ghlane version)" = "ghlane 0.2.1"
+          test "$(./ghlane version)" = "ghlane 0.2.2"
           CORE="$PWD/ghlane" ./tests/fault-injection.sh
           CORE="$PWD/ghlane" ./tests/registry.sh
           ./tests/registry-health.sh
