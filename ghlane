@@ -451,7 +451,15 @@ benchmark_routes() {
   }
 
   printf '%-28s %14s %s\n' 'ROUTE' 'SPEED' 'RESULT'
-  while IFS=
+  while IFS=$'\t' read -r speed candidate; do
+    [[ -n "$candidate" ]] || continue
+    label=$(candidate_label "$candidate")
+    mark=''
+    [[ "$candidate" == "$best" ]] && mark='selected'
+    printf '%-28s %14s %s\n' "$label" "$(format_speed "$speed")" "$mark"
+  done < <(sort -t $'\t' -k1,1nr "$report")
+  rm -f "$report"
+}
 
 select_candidate() {
   local url="$1" candidate lock_fd
