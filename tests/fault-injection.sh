@@ -496,7 +496,8 @@ transport_gap 'curl --interface' --interface lo
 transport_gap 'curl --insecure' --insecure
 transport_gap 'curl --cacert' --cacert /tmp/nonexistent-ca
 
-printf '\n--- I. implicit config-file safety ---\n'\nunsafe_conf="$TMP/unsafe-ghlane.conf"
+printf '\n--- I. implicit config-file safety ---\n'
+unsafe_conf="$TMP/unsafe-ghlane.conf"
 cp "$CONF" "$unsafe_conf"
 printf '\ntouch %q\n' "$TMP/unsafe-config-executed" >>"$unsafe_conf"
 chmod 0666 "$unsafe_conf"
