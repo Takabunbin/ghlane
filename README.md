@@ -44,7 +44,7 @@ $ curl -fL \
 
 这段输出来自一次真实链路验收。网络、镜像状态和 GitHub 可达性会改变速度，ghlane 会在你的机器上重新测速。
 
-| 你关心的事 | ghlane 的处理 |
+| 行为 | ghlane 的处理 |
 | --- | --- |
 | 命令习惯 | 保留 `curl` / `wget` |
 | 选路 | 本机同时测试 DIRECT 和候选镜像 |
@@ -100,24 +100,24 @@ ghlane 只接管符合安全条件的 GitHub Release 下载。其他命令交给
 
 ```mermaid
 flowchart TD
-    A["curl / wget 请求"] --> B{"公开 GitHub Release<br/>且参数可安全代理？"}
-    B -- "否" --> D["系统 curl / wget<br/>直接执行"]
-    B -- "是" --> M["读取 registry-v1<br/>和本地 fallback"]
+    A["curl / wget 请求"] --> B{"公开 GitHub Release<br/>安全参数与输出路径"}
+    B -- "条件不满足" --> D["系统 curl / wget<br/>直接执行"]
+    B -- "条件满足" --> M["读取 registry-v1<br/>和本地 fallback"]
     M --> R["DIRECT + 候选镜像<br/>本机测速"]
     R --> F["选择当前更快的线路"]
     F --> T["下载到目标目录中的临时文件"]
-    T --> V{"SHA-256 + 文件大小<br/>与 GitHub 元数据一致？"}
-    V -- "是" --> O["提交为目标文件"]
-    V -- "否" --> X["丢弃镜像结果"]
+    T --> V{"SHA-256 + 文件大小<br/>校验结果"}
+    V -- "一致" --> O["提交为目标文件"]
+    V -- "不一致" --> X["丢弃镜像结果"]
     X --> G["GitHub DIRECT 重试"]
-    G --> W{"再次校验"}
-    W -- "通过" --> O
-    W -- "失败" --> E["返回下载错误"]
+    G --> W{"DIRECT 校验结果"}
+    W -- "一致" --> O
+    W -- "不一致" --> E["返回下载错误"]
 ```
 
 客户端会缓存一次选路结果，默认有效 1 小时。远程 registry 默认缓存 24 小时。冷启动时，候选线路使用同一测速窗口，DIRECT 也参加比较。
 
-### 镜像列表怎么更新
+### 镜像列表更新流程
 
 ```mermaid
 flowchart LR
@@ -215,7 +215,7 @@ ghlane version
 | --- | --- |
 | `ghlane status` | 查看后端、registry 状态和缓存线路 |
 | `ghlane mirrors` | 查看 DIRECT 与当前候选镜像 |
-| `ghlane refresh` | 立即刷新 `registry-v1`，并清除旧选路缓存 |
+| `ghlane refresh` | 触发 `registry-v1` 刷新并清除旧选路缓存 |
 | `ghlane self-test` | 检查核心规则和本地安全前提 |
 | `ghlane version` | 输出当前版本 |
 
@@ -312,6 +312,6 @@ ghlane 把兼容性让给 DIRECT。它只加速自己能验证语义和文件完
 
 客户端不运行 daemon 或 cron。registry 维护由仓库的 GitHub Actions 执行，用户机器只在需要下载时工作。
 
-## License
+## 许可证
 
 [MIT](LICENSE) © 2026 Takabunbin
