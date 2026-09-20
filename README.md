@@ -1,180 +1,95 @@
 # ghlane
 
-**给中国大陆 Linux 主机 / VPS 加速 GitHub Release 下载**
+**给中国大陆 Linux 主机 / VPS 的 GitHub Release 自动加速器**
 
 [![CI](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml/badge.svg)](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml)
 [![Version](https://img.shields.io/badge/version-0.2.1-0969da)](https://github.com/Takabunbin/ghlane)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](https://github.com/Takabunbin/ghlane)
 [![License](https://img.shields.io/github/license/Takabunbin/ghlane)](LICENSE)
 
-当 Linux 服务器直连 GitHub Release 较慢或不稳定时，ghlane 会在**这台机器上**比较 GitHub DIRECT 和多个可用镜像，选择本轮测速更快的线路。
+如果你的 Linux 服务器用 `curl` 或 `wget` 下载 GitHub Release 经常很慢、卡住或超时，安装 ghlane 一次即可。之后继续使用原来的 GitHub URL 和原来的下载命令。
 
-装好以后：
+ghlane 会在**当前这台机器**上测试 GitHub DIRECT 和可用镜像，选择本轮更快的线路。下载完成后，它再用 GitHub Releases API 提供的 SHA-256 和文件大小校验文件。
 
-- 不改 GitHub 下载链接
-- 不记镜像前缀
-- 不运行后台守护进程
-- 继续使用原来的 `curl` 和 `wget`
+**适合：** 中国大陆 Linux VPS、云服务器、软路由或其他经常从 GitHub Releases 拉取二进制文件的 Linux 主机。
 
-ghlane 当前只处理公开的 GitHub Release 文件：
+**当前不处理：** `git clone`、GitHub API、Raw 文件、archive/codeload、私有 Release。
 
-```text
-https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
-```
+## 快速开始
 
-它不加速 `git clone`、GitHub API、Raw 文件、archive/codeload 或私有 Release，也不修改系统代理。
-
-## 安装
+安装：
 
 ```bash
 curl -fsSL https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/install.sh | bash
 ```
 
-安装器会先把当前 `main` 解析成具体 commit，再下载安装文件。非 root 用户需要系统提供 `sudo`。
-
-检查状态：
-
-```bash
-ghlane status
-```
-
-```text
-ghlane 0.2.1
-curl: /usr/bin/curl
-wget: /usr/bin/wget
-mirrors fallback: /etc/ghlane/mirrors.txt
-registry: https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/registry-v1.txt
-registry cache: fresh
-cached route: gh-proxy.com
-```
-
-## 它到底比较了哪些线路
-
-正常下载时，ghlane 只打印最终选择，避免每次 `curl` 都输出整张测速表：
-
-```console
-$ curl -fL   https://github.com/komari-monitor/komari/releases/download/1.5.0-fix1/komari-linux-amd64   -o komari-linux-amd64
-
-[ghlane] selected gh-proxy.com
-100 42.6M  100 42.6M    0     0  13.6M      0  0:00:03  0:00:03 --:--:-- 13.6M
-```
-
-这段 13.6 MiB/s 来自一次真实下载验收，但它只说明**最终下载速度**，不能单独证明其他线路更慢。
-
-要看完整对比，直接跑：
-
-```bash
-ghlane benchmark   https://github.com/komari-monitor/komari/releases/download/1.5.0-fix1/komari-linux-amd64
-```
-
-`benchmark` 会用同一个 Release URL 测试 DIRECT 和当前所有候选，并列出每条线路的本机结果：
-
-```text
-ROUTE                                 SPEED RESULT
-<route 1>                         <speed>
-<route 2>                         <speed> selected
-<route 3>                    unavailable
-...
-```
-
-这里不把某次测速数字写死在 README 里，因为 VPS、运营商、时间和镜像状态都会改变结果。你看到的 `selected` 来自当前机器这一轮实测。
-
-查看当前候选：
-
-```bash
-ghlane mirrors
-```
-
-## 使用
-
-`curl`：
+安装后继续用原来的命令：
 
 ```bash
 curl -fL   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -o FILE
 ```
 
-`wget`：
+或者：
 
 ```bash
 wget   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -O FILE
 ```
 
-不需要把 URL 手动改成：
+你不需要把 GitHub URL 手工改成某个镜像前缀。
 
-```text
-https://某个镜像/https://github.com/...
+查看当前状态：
+
+```bash
+ghlane status
 ```
 
-符合条件的 Release 下载由 ghlane 选路；无法确认安全语义的调用原样交给系统 `curl` 或 `wget`。
-
-## 工作方式
+## 工作原理
 
 ```mermaid
 flowchart TD
-    A["curl / wget<br/>GitHub Release URL"] --> B{"可以安全接管"}
-    B -- "否" --> D["系统 curl / wget<br/>DIRECT"]
-    B -- "是" --> M["DIRECT + registry 镜像"]
-    M --> R["当前机器并发测速"]
-    R --> F["选择本轮更快线路"]
-    F --> T["下载到临时文件"]
-    T --> V{"GitHub SHA-256 + size"}
-    V -- "一致" --> O["提交目标文件"]
-    V -- "不一致 / 下载失败" --> X["丢弃镜像结果"]
-    X --> G["GitHub DIRECT 重试"]
-    G --> W{"再次校验"}
-    W -- "一致" --> O
-    W -- "失败" --> E["返回下载错误"]
+    A["curl / wget<br/>GitHub Release 下载"] --> B{"ghlane 可以安全接管"}
+    B -- "否" --> C["系统 curl / wget<br/>直接访问 GitHub"]
+    B -- "是" --> D["GitHub DIRECT + 当前镜像候选"]
+    D --> E["在这台机器上并发测速"]
+    E --> F["选择本轮更快线路"]
+    F --> G["下载到临时文件"]
+    G --> H{"SHA-256 + 文件大小<br/>与 GitHub 元数据一致"}
+    H -- "是" --> I["提交目标文件"]
+    H -- "否" --> J["丢弃镜像结果"]
+    J --> K["GitHub DIRECT 重试并再次校验"]
 ```
 
-测速发生在客户端。不同 VPS、运营商或时间段可能选出不同线路。
+选路发生在你的机器上。不同 VPS、运营商和时间段可能得到不同结果。ghlane 默认缓存一次选路结果，避免每次下载都重新测速。
 
-客户端默认缓存选路结果 1 小时，远程 registry 默认缓存 24 小时。需要刷新候选并让下一次下载重新选路：
+## 镜像池
+
+ghlane 从人工种子和公开社区来源收集候选镜像。GitHub Actions 会先检查候选是否能正确返回 GitHub Release 样本，再生成版本化的 `registry-v1`。
+
+中央检查只决定哪些节点可以进入候选池。客户端仍会在本机比较 DIRECT 和当前候选。
+
+查看候选：
 
 ```bash
-ghlane refresh
+ghlane mirrors
 ```
 
-## 镜像从哪里来
+排查选路时，可以对一个具体 Release URL 查看本机测速结果：
 
-```mermaid
-flowchart LR
-    S["人工种子与社区来源"] --> Q["候选发现"]
-    Q --> C["隔离候选"]
-    C --> H["GitHub Actions<br/>Release canary 检查"]
-    H --> P["registry-v1"]
-    P --> L["你的服务器<br/>本地测速"]
+```bash
+ghlane benchmark https://github.com/OWNER/REPO/releases/download/TAG/FILE
 ```
 
-仓库定期收集候选镜像并做中央健康检查。通过检查的节点才有资格进入 `registry-v1`。
-
-中央检查只负责筛掉明显不可用或返回错误内容的候选，**不负责判断你这台机器哪条最快**。最终速度比较仍在客户端完成。
-
-registry 格式：
-
-```text
-# ghlane-registry-v1
-https://mirror.example
-```
-
-registry 刷新失败时，ghlane 会继续使用可用缓存；没有可用缓存时回退到安装时的镜像列表和 DIRECT。
+`benchmark` 是诊断命令，日常下载不需要运行。
 
 ## 下载完整性
 
-**ghlane 不信任镜像返回的文件内容。**
+ghlane 把公共镜像当作不可信传输层。
 
-镜像只负责传输。最终文件需要和 GitHub Releases API 返回的资产 `digest` 与 `size` 一致。
+符合加速条件的下载会先进入临时文件。ghlane 从 GitHub Releases API 获取该 asset 的 SHA-256 和文件大小，校验一致后才提交目标文件。
 
-加速需要同时满足：
+镜像返回错误内容、异常响应或下载失败时，ghlane 会丢弃临时结果，并尝试 GitHub DIRECT。
 
-1. URL 是公开的 GitHub Release asset。
-2. `curl` / `wget` 参数属于已支持的安全集合。
-3. 命令指定一个尚不存在的输出文件。
-4. GitHub Releases API 提供 SHA-256 和文件大小。
-5. 完整下载结果通过校验。
-
-镜像返回错误文件、异常大响应或下载失败时，临时文件不会交给调用者，ghlane 会尝试 GitHub DIRECT。
-
-这些情况直接绕过镜像：
+以下情况直接交给系统 `curl` / `wget`：
 
 | 情况 | 处理 |
 | --- | --- |
@@ -187,20 +102,48 @@ registry 刷新失败时，ghlane 会继续使用可用缓存；没有可用缓�
 | GitHub 没有提供可验证的 Release digest | DIRECT |
 | Python 3 或 SHA-256 工具不可用 | DIRECT |
 
-详细安全模型见 [SECURITY.md](SECURITY.md)。
+安全边界和信任模型见 [SECURITY.md](SECURITY.md)。
 
-## 适合谁
+## 支持范围
 
-- 中国大陆 Linux VPS、云服务器或主机，GitHub Release 直连较慢或容易超时
-- 安装脚本经常从 GitHub Releases 拉二进制文件
-- 不想自己找镜像站、手工改 URL 或长期固定一个镜像
-- 有多台服务器，希望每台机器按自己的网络单独选路
+ghlane 当前加速这一类地址：
 
-如果需求是 `git clone`、Raw、GitHub API、私有 Release，ghlane 当前不处理。
+```text
+https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
+```
+
+| 请求 | 处理 |
+| --- | --- |
+| 公开 GitHub Release asset | 符合安全条件时参与选路 |
+| GitHub API | DIRECT |
+| `raw.githubusercontent.com` | DIRECT |
+| archive / codeload | DIRECT |
+| `git clone` / fetch / push | 不接管 |
+| 私有 Release | DIRECT |
+| 带 query 或 fragment 的 Release URL | DIRECT |
+
+## 命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `ghlane status` | 查看后端、registry 和缓存线路 |
+| `ghlane mirrors` | 查看 DIRECT 与当前镜像候选 |
+| `ghlane benchmark URL` | 排查时查看当前机器的线路测速 |
+| `ghlane refresh` | 刷新 registry 并清除选路缓存 |
+| `ghlane self-test` | 检查本地核心规则 |
+| `ghlane version` | 输出版本 |
+
+临时跳过 ghlane：
+
+```bash
+GHLANE_BYPASS=1 curl -fL URL -o FILE
+```
 
 ## 已验证系统
 
-| 系统 | CI |
+CI 当前覆盖：
+
+| 系统 | 状态 |
 | --- | --- |
 | Debian 12 | 通过 |
 | Debian 13 | 通过 |
@@ -209,24 +152,8 @@ registry 刷新失败时，ghlane 会继续使用可用缓存；没有可用缓�
 
 加速路径需要 Bash、curl、Python 3 和 `sha256sum`。使用 wget 加速时还需要 wget。
 
-## 命令
-
-| 命令 | 用途 |
-| --- | --- |
-| `ghlane status` | 查看后端、registry 状态和缓存线路 |
-| `ghlane mirrors` | 查看 DIRECT 与当前候选镜像 |
-| `ghlane benchmark URL` | 对同一个 Release URL 测试 DIRECT 与全部候选 |
-| `ghlane refresh` | 刷新 `registry-v1` 并清除选路缓存 |
-| `ghlane self-test` | 检查核心规则和本地安全前提 |
-| `ghlane version` | 输出当前版本 |
-
-临时跳过 ghlane：
-
-```bash
-GHLANE_BYPASS=1 curl -fL URL -o FILE
-```
-
-## 配置
+<details>
+<summary><strong>配置</strong></summary>
 
 安装器写入：
 
@@ -256,8 +183,10 @@ REGISTRY_URL=''
 
 重新安装会保留已有配置，并迁移旧版官方 registry URL。安装器不会覆盖已有的 `/usr/local/bin/curl` 或 `/usr/local/bin/wget`。
 
+</details>
+
 <details>
-<summary>安装后的文件</summary>
+<summary><strong>安装后的文件</strong></summary>
 
 ```text
 /usr/local/libexec/ghlane
@@ -268,7 +197,7 @@ REGISTRY_URL=''
 /etc/ghlane/mirrors.txt
 ```
 
-`/usr/local/bin/curl` 和 `/usr/local/bin/wget` 只在对应路径可安全接管时创建为指向 ghlane 的符号链接。系统后端保留在原位置。
+`/usr/local/bin/curl` 和 `/usr/local/bin/wget` 只在对应路径可安全接管时创建为指向 ghlane 的符号链接。系统 curl / wget 保留在原位置。
 
 </details>
 
@@ -280,7 +209,8 @@ curl -fsSL https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/uninstall.sh | bas
 
 卸载器只删除 ghlane 创建的 wrapper、核心文件和配置，不删除系统 `curl` 或 `wget`。
 
-## 开发与测试
+<details>
+<summary><strong>开发与测试</strong></summary>
 
 ```bash
 bash -n ghlane install.sh uninstall.sh
@@ -293,13 +223,9 @@ bash tests/registry-health.sh
 python3 tests/discovery.py
 ```
 
-GitHub Actions 还会在 Debian 12/13、Ubuntu 24.04/26.04 上跑安装生命周期测试。
+GitHub Actions 还会在 Debian 12/13、Ubuntu 24.04/26.04 上运行安装生命周期测试。
 
-## 设计取舍
-
-ghlane 只加速自己能确认命令语义、并能校验最终文件的请求。条件不满足时使用 DIRECT。
-
-客户端没有 daemon 或 cron。registry 维护由仓库的 GitHub Actions 执行，用户机器只在实际下载时工作。
+</details>
 
 ## 许可证
 
