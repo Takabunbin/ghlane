@@ -5,11 +5,12 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CURL_BIN="${CURL_BIN:-/usr/bin/curl}"
 SOURCE_FILE="${SOURCE_FILE:-$ROOT/mirrors.txt}"
 STABLE_FILE="${STABLE_FILE:-$ROOT/mirrors.txt}"
-OUTPUT_FILE="${OUTPUT_FILE:-$ROOT/registry.txt}"
+PREVIOUS_FILE="${PREVIOUS_FILE:-$ROOT/registry-v1.txt}"
+OUTPUT_FILE="${OUTPUT_FILE:-$ROOT/registry-v1.txt}"
+LEGACY_OUTPUT_FILE="${LEGACY_OUTPUT_FILE:-$ROOT/registry.txt}"
 PROBE_URL="${PROBE_URL:-https://github.com/komari-monitor/komari/releases/download/1.5.0-fix1/komari-linux-amd64}"
 PROBE_BYTES="${PROBE_BYTES:-32768}"
 PROBE_TIMEOUT="${PROBE_TIMEOUT:-10}"
-MIN_HEALTHY="${MIN_HEALTHY:-2}"
 MAX_MIRRORS="${MAX_MIRRORS:-8}"
 STABLE_SLOTS="${STABLE_SLOTS:-5}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-128}"
@@ -24,10 +25,13 @@ trap 'rm -rf "$TMP"' EXIT
 
 END=$((PROBE_BYTES - 1))
 REF="$TMP/reference.bin"
-HEALTHY="$TMP/healthy"
+PASS_DIR="$TMP/pass"
+SOFT_DIR="$TMP/soft"
+HARD_DIR="$TMP/hard"
 LOGS="$TMP/logs"
-OUT="$TMP/registry.txt"
-mkdir -p "$HEALTHY" "$LOGS"
+OUT="$TMP/registry-v1.txt"
+LEGACY_OUT="$TMP/registry.txt"
+mkdir -p "$PASS_DIR" "$SOFT_DIR" "$HARD_DIR" "$LOGS"
 
 echo "=== ghlane registry health ==="
 echo "fixture: $PROBE_URL"
@@ -41,7 +45,7 @@ if ! "$CURL_BIN" -q -fsSL \
   -o "$REF" \
   "$PROBE_URL"
 then
-  echo "registry-health: direct fixture failed; keeping existing registry" >&2
+  echo "registry-health: direct fixture failed; keeping existing registries" >&2
   exit 2
 fi
 
@@ -57,23 +61,31 @@ mapfile -t CANDIDATES < <(
     {
       sub(/\r$/, "")
       if ($0 == "" || $0 ~ /^#/) next
+      if ($0 !~ /^https:\/\/[^[:space:]]+$/) next
       if (!seen[$0]++) print
     }
   ' "$SOURCE_FILE"
 )
 
 if (( ${#CANDIDATES[@]} > MAX_CANDIDATES )); then
-  echo "registry-health: ${#CANDIDATES[@]} candidates exceeds cap $MAX_CANDIDATES" >&2
-  exit 2
+  CANDIDATES=("${CANDIDATES[@]:0:MAX_CANDIDATES}")
+  echo "registry-health: candidate list truncated to $MAX_CANDIDATES endpoints" >&2
 fi
+
+declare -A PREVIOUS=()
+
+
+if [[ -r "$PREVIOUS_FILE" ]]; then
+  while IFS= read -r mirror || [[ -n "$mirror" ]]; do
+    mirror="${mirror//$'\r'/}"
+    [[ "$mirror" == https://* ]] || continue
+    PREVIOUS["$mirror"]=1
+  done <"$PREVIOUS_FILE"
+fi
+
 
 probe_one() {
   local index="$1" mirror="$2" sample stats rc code ctype bytes speed sha
-
-  if [[ "$mirror" != https://* || "$mirror" == *[[:space:]]* ]]; then
-    printf 'SKIP  %s  invalid\n' "$mirror" >"$LOGS/$index"
-    return 0
-  fi
 
   sample="$TMP/sample.$index"
   stats=$("$CURL_BIN" -q -fsSL \
@@ -90,17 +102,23 @@ probe_one() {
   bytes="${bytes:-0}"
   speed="${speed:-0}"
 
-  if [[ "$rc" -eq 0 && "$code" =~ ^20[06]$ && "$bytes" -eq "$PROBE_BYTES" && -f "$sample" ]]; then
+  if [[ "$rc" -eq 0 && "$code" =~ ^20[06]$ && -f "$sample" ]]; then
     sha=$(sha256sum "$sample" | awk '{print $1}')
-    if [[ "$sha" == "$REF_SHA" ]]; then
-      printf '%s\n' "$mirror" >"$HEALTHY/$index"
+    if [[ "$bytes" -eq "$PROBE_BYTES" && "$sha" == "$REF_SHA" ]]; then
+      printf '%s\n' "$mirror" >"$PASS_DIR/$index"
       printf 'PASS  %s  code=%s speed=%s\n' "$mirror" "$code" "$speed" >"$LOGS/$index"
       return 0
     fi
+
+    printf '%s\n' "$mirror" >"$HARD_DIR/$index"
+    printf 'HARD  %s  content/protocol mismatch code=%s bytes=%s type=%s\n' \
+      "$mirror" "$code" "$bytes" "${ctype:-unknown}" >"$LOGS/$index"
+    return 0
   fi
 
-  printf 'FAIL  %s  rc=%s code=%s bytes=%s type=%s\n' \
-    "$mirror" "$rc" "${code:-000}" "$bytes" "${ctype:-unknown}" >"$LOGS/$index"
+  printf '%s\n' "$mirror" >"$SOFT_DIR/$index"
+  printf 'SOFT  %s  runner-unreachable rc=%s code=%s bytes=%s\n' \
+    "$mirror" "$rc" "${code:-000}" "$bytes" >"$LOGS/$index"
 }
 
 running=0
@@ -118,33 +136,49 @@ for i in "${!CANDIDATES[@]}"; do
   [[ -r "$LOGS/$i" ]] && cat "$LOGS/$i"
 done
 
-declare -A IS_HEALTHY=()
+declare -A ELIGIBLE=()
 declare -A SELECTED=()
-HEALTHY_LIST=()
+PASS_COUNT=0
+SOFT_RETAINED=0
+HARD_COUNT=0
 
 for i in "${!CANDIDATES[@]}"; do
-  if [[ -r "$HEALTHY/$i" ]]; then
-    mirror=$(cat "$HEALTHY/$i")
-    IS_HEALTHY["$mirror"]=1
-    HEALTHY_LIST+=("$mirror")
+  mirror="${CANDIDATES[$i]}"
+
+  if [[ -r "$PASS_DIR/$i" ]]; then
+    ELIGIBLE["$mirror"]=1
+    PASS_COUNT=$((PASS_COUNT + 1))
+    continue
+  fi
+
+  if [[ -r "$HARD_DIR/$i" ]]; then
+    HARD_COUNT=$((HARD_COUNT + 1))
+    continue
+  fi
+
+  # A hosted runner is only one network viewpoint. Retain an endpoint across
+  # transient reachability failure only if it was already published. Content
+  # or protocol mismatches above are never retained.
+  if [[ -r "$SOFT_DIR/$i" && -n "${PREVIOUS[$mirror]:-}" ]]; then
+    ELIGIBLE["$mirror"]=1
+    SOFT_RETAINED=$((SOFT_RETAINED + 1))
   fi
 done
 
-TOTAL_HEALTHY=${#HEALTHY_LIST[@]}
-if (( TOTAL_HEALTHY < MIN_HEALTHY )); then
-  echo "registry-health: only $TOTAL_HEALTHY healthy mirror(s); minimum is $MIN_HEALTHY; keeping existing registry" >&2
-  exit 1
-fi
+printf '# ghlane-registry-v1\n' >"$OUT"
+: >"$LEGACY_OUT"
 
 STABLE_LIMIT=$STABLE_SLOTS
 (( STABLE_LIMIT > MAX_MIRRORS )) && STABLE_LIMIT=$MAX_MIRRORS
 PUBLISHED=0
 
+# Preserve manually approved mirrors in stable slots when they are currently
+# verified or only transiently unreachable.
 if [[ -r "$STABLE_FILE" ]]; then
   while IFS= read -r mirror || [[ -n "$mirror" ]]; do
     mirror="${mirror//$'\r'/}"
-    [[ -z "$mirror" || "$mirror" == \#* ]] && continue
-    [[ -n "${IS_HEALTHY[$mirror]:-}" ]] || continue
+    [[ "$mirror" == https://* ]] || continue
+    [[ -n "${ELIGIBLE[$mirror]:-}" ]] || continue
     [[ -z "${SELECTED[$mirror]:-}" ]] || continue
     printf '%s\n' "$mirror" >>"$OUT"
     SELECTED["$mirror"]=1
@@ -153,15 +187,14 @@ if [[ -r "$STABLE_FILE" ]]; then
   done <"$STABLE_FILE"
 fi
 
-# ponytail: five stable slots plus weekly rotating exploration slots avoid
-# persistent health-history state while ensuring new mirrors are not starved.
-# If the pool routinely exceeds 128 or rotation churn becomes harmful, add
-# capped reliability history instead of increasing client probe fan-out.
+# v1 clients verify every complete asset against GitHub's release digest, so
+# healthy discovered endpoints may safely occupy bounded exploration slots.
 EXPLORE="$TMP/explore"
 WEEK=$(date -u +%G-%V)
 : >"$EXPLORE"
 
-for mirror in "${HEALTHY_LIST[@]}"; do
+for mirror in "${CANDIDATES[@]}"; do
+  [[ -n "${ELIGIBLE[$mirror]:-}" ]] || continue
   [[ -z "${SELECTED[$mirror]:-}" ]] || continue
   key=$(printf '%s' "$WEEK|$mirror" | sha256sum | awk '{print $1}')
   printf '%s\t%s\n' "$key" "$mirror" >>"$EXPLORE"
@@ -176,14 +209,23 @@ while read -r _ mirror; do
   PUBLISHED=$((PUBLISHED + 1))
 done < <(sort "$EXPLORE")
 
-if (( PUBLISHED < MIN_HEALTHY )); then
-  echo "registry-health: only $PUBLISHED publishable mirror(s); keeping existing registry" >&2
-  exit 1
-fi
+# Legacy 0.2.0 clients do not have end-to-end digest verification. Publish a
+# deliberately unusable GitHub prefix so old clients keep a syntactically
+# valid registry but can only succeed through their built-in DIRECT route.
+printf 'https://github.com\n' >"$LEGACY_OUT"
 
 mkdir -p "$(dirname "$OUTPUT_FILE")"
 mv "$OUT" "$OUTPUT_FILE"
 
-echo "healthy candidates: $TOTAL_HEALTHY"
-echo "published: $PUBLISHED (stable<=${STABLE_LIMIT}, exploration=$((PUBLISHED > STABLE_LIMIT ? PUBLISHED - STABLE_LIMIT : 0)))"
-echo "registry: $OUTPUT_FILE"
+if [[ -n "$LEGACY_OUTPUT_FILE" ]]; then
+  mkdir -p "$(dirname "$LEGACY_OUTPUT_FILE")"
+  mv "$LEGACY_OUT" "$LEGACY_OUTPUT_FILE"
+fi
+
+echo "candidates: ${#CANDIDATES[@]}"
+echo "verified now: $PASS_COUNT"
+echo "retained on runner-only failure: $SOFT_RETAINED"
+echo "hard rejected: $HARD_COUNT"
+echo "v1 published: $PUBLISHED"
+echo "registry-v1: $OUTPUT_FILE"
+echo "legacy registry: ${LEGACY_OUTPUT_FILE:-disabled}"

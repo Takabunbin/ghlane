@@ -44,7 +44,7 @@ case "$target" in
     write_sample A
     exit 0
     ;;
-  https://good*.example/*|https://stable*.example/*|https://new*.example/*)
+  https://good*.example/*)
     write_sample A
     (( write_stats )) && printf '206|application/octet-stream|32768|100000'
     exit 0
@@ -54,7 +54,7 @@ case "$target" in
     (( write_stats )) && printf '206|application/octet-stream|32768|900000'
     exit 0
     ;;
-  https://dead.example/*)
+  https://dead.example/*|https://newdead.example/*)
     (( write_stats )) && printf '000||0|0'
     exit 7
     ;;
@@ -65,75 +65,115 @@ esac
 FAKE
 chmod +x "$TMP/fake-curl"
 
-printf '%s\n'   'https://good1.example'   'https://bad.example'   'http://invalid.example'   'https://dead.example'   'https://good2.example' >"$TMP/source.txt"
-
-if CURL_BIN="$TMP/fake-curl"    SOURCE_FILE="$TMP/source.txt"    STABLE_FILE="$TMP/source.txt"    OUTPUT_FILE="$TMP/registry.txt"    MIN_HEALTHY=2    bash "$BUILDER" >/dev/null 2>&1 &&
-   [[ "$(cat "$TMP/registry.txt")" == $'https://good1.example\nhttps://good2.example' ]]
-then
-  pass 'healthy mirrors kept in source order; bad content/dead/invalid rejected'
-else
-  fail 'healthy mirrors kept in source order; bad content/dead/invalid rejected'
-fi
-
-printf 'https://good1.example\n' >"$TMP/too-few.txt"
-printf 'https://old.example\n' >"$TMP/existing.txt"
-
-set +e
-CURL_BIN="$TMP/fake-curl" SOURCE_FILE="$TMP/too-few.txt" STABLE_FILE="$TMP/too-few.txt" OUTPUT_FILE="$TMP/existing.txt" MIN_HEALTHY=2 bash "$BUILDER" >/dev/null 2>&1
-rc=$?
-set -e
-
-if [[ "$rc" -ne 0 && "$(cat "$TMP/existing.txt")" == 'https://old.example' ]]; then
-  pass 'health-floor failure keeps existing registry untouched'
-else
-  fail 'health-floor failure keeps existing registry untouched'
-fi
-
-printf '%s\n'   'https://good1.example'   'https://good2.example' >"$TMP/cap.txt"
-
-if CURL_BIN="$TMP/fake-curl"    SOURCE_FILE="$TMP/cap.txt"    STABLE_FILE="$TMP/cap.txt"    OUTPUT_FILE="$TMP/capped.txt"    MIN_HEALTHY=1    MAX_MIRRORS=1    bash "$BUILDER" >/dev/null 2>&1 &&
-   [[ "$(cat "$TMP/capped.txt")" == 'https://good1.example' ]]
-then
-  pass 'registry size cap is enforced'
-else
-  fail 'registry size cap is enforced'
-fi
-
+printf '%s\n' \
+  'https://good1.example' \
+  'https://dead.example' \
+  'https://bad.example' >"$TMP/stable.txt"
 
 printf '%s\n' \
-  'https://stable1.example' \
-  'https://stable2.example' \
-  'https://stable3.example' \
-  'https://stable4.example' \
-  'https://stable5.example' >"$TMP/stable.txt"
+  'https://good1.example' \
+  'https://dead.example' \
+  'https://bad.example' \
+  'https://good2.example' \
+  'https://good3.example' \
+  'https://good4.example' \
+  'https://good5.example' >"$TMP/source.txt"
 
-cat "$TMP/stable.txt" >"$TMP/explore-source.txt"
 printf '%s\n' \
-  'https://new1.example' \
-  'https://new2.example' \
-  'https://new3.example' \
-  'https://new4.example' >>"$TMP/explore-source.txt"
+  '# ghlane-registry-v1' \
+  'https://good1.example' \
+  'https://dead.example' \
+  'https://good3.example' >"$TMP/previous-v1.txt"
+
+printf '%s\n' \
+  'https://good1.example' \
+  'https://dead.example' >"$TMP/previous-legacy.txt"
 
 if CURL_BIN="$TMP/fake-curl" \
-   SOURCE_FILE="$TMP/explore-source.txt" \
+   SOURCE_FILE="$TMP/source.txt" \
    STABLE_FILE="$TMP/stable.txt" \
-   OUTPUT_FILE="$TMP/explore-registry.txt" \
-   MIN_HEALTHY=2 \
-   MAX_MIRRORS=8 \
-   STABLE_SLOTS=5 \
-   PARALLEL=4 \
+   PREVIOUS_FILE="$TMP/previous-v1.txt" \
+   OUTPUT_FILE="$TMP/registry-v1.txt" \
+   LEGACY_OUTPUT_FILE="$TMP/registry.txt" \
+   MAX_MIRRORS=5 \
+   STABLE_SLOTS=2 \
    bash "$BUILDER" >/dev/null 2>&1
 then
-  first_five=$(head -n 5 "$TMP/explore-registry.txt")
-  total=$(wc -l <"$TMP/explore-registry.txt")
-  new_count=$(grep -c '^https://new' "$TMP/explore-registry.txt" || true)
-  if [[ "$first_five" == "$(cat "$TMP/stable.txt")" && "$total" -eq 8 && "$new_count" -eq 3 ]]; then
-    pass 'stable slots are preserved and new healthy mirrors get exploration slots'
+  v1_count=$(grep -c '^https://' "$TMP/registry-v1.txt" || true)
+  if grep -Fxq '# ghlane-registry-v1' "$TMP/registry-v1.txt" &&
+     grep -Fxq 'https://good1.example' "$TMP/registry-v1.txt" &&
+     grep -Fxq 'https://dead.example' "$TMP/registry-v1.txt" &&
+     grep -Eq '^https://good[2345]\.example$' "$TMP/registry-v1.txt" &&
+     ! grep -Fxq 'https://bad.example' "$TMP/registry-v1.txt" &&
+     [[ "$v1_count" -eq 5 ]] &&
+     [[ "$(cat "$TMP/registry.txt")" == 'https://github.com' ]]
+  then
+    pass 'v1 admits verified discoveries while legacy is forced DIRECT-only'
   else
-    fail 'stable slots are preserved and new healthy mirrors get exploration slots'
+    fail 'v1 admits verified discoveries while legacy is forced DIRECT-only'
   fi
 else
-  fail 'stable slots are preserved and new healthy mirrors get exploration slots'
+  fail 'v1 admits verified discoveries while legacy is forced DIRECT-only'
+fi
+
+printf '%s\n' 'https://newdead.example' >"$TMP/newdead-source.txt"
+: >"$TMP/no-stable.txt"
+printf '# ghlane-registry-v1\n' >"$TMP/empty-v1.txt"
+: >"$TMP/empty-legacy.txt"
+
+if CURL_BIN="$TMP/fake-curl" \
+   SOURCE_FILE="$TMP/newdead-source.txt" \
+   STABLE_FILE="$TMP/no-stable.txt" \
+   PREVIOUS_FILE="$TMP/empty-v1.txt" \
+   OUTPUT_FILE="$TMP/newdead-v1.txt" \
+   LEGACY_OUTPUT_FILE="$TMP/newdead-legacy.txt" \
+   bash "$BUILDER" >/dev/null 2>&1 &&
+   [[ "$(cat "$TMP/newdead-v1.txt")" == '# ghlane-registry-v1' ]] &&
+   [[ "$(cat "$TMP/newdead-legacy.txt")" == 'https://github.com' ]]
+then
+  pass 'new runner-unreachable discovery is not promoted and legacy stays DIRECT-only'
+else
+  fail 'new runner-unreachable discovery is not promoted and legacy stays DIRECT-only'
+fi
+
+printf 'https://bad.example\n' >"$TMP/bad-source.txt"
+printf 'https://bad.example\n' >"$TMP/bad-stable.txt"
+printf '# ghlane-registry-v1\nhttps://bad.example\n' >"$TMP/bad-previous-v1.txt"
+printf 'https://bad.example\n' >"$TMP/bad-previous-legacy.txt"
+
+if CURL_BIN="$TMP/fake-curl" \
+   SOURCE_FILE="$TMP/bad-source.txt" \
+   STABLE_FILE="$TMP/bad-stable.txt" \
+   PREVIOUS_FILE="$TMP/bad-previous-v1.txt" \
+   OUTPUT_FILE="$TMP/bad-v1.txt" \
+   LEGACY_OUTPUT_FILE="$TMP/bad-legacy.txt" \
+   bash "$BUILDER" >/dev/null 2>&1 &&
+   [[ "$(cat "$TMP/bad-v1.txt")" == '# ghlane-registry-v1' ]] &&
+   [[ "$(cat "$TMP/bad-legacy.txt")" == 'https://github.com' ]]
+then
+  pass 'content mismatch is hard-rejected from v1 and legacy stays DIRECT-only'
+else
+  fail 'content mismatch is hard-rejected from v1 and legacy stays DIRECT-only'
+fi
+
+printf '%s\n' 'https://good1.example' 'https://good2.example' >"$TMP/cap-source.txt"
+printf 'https://good1.example\n' >"$TMP/cap-stable.txt"
+
+if CURL_BIN="$TMP/fake-curl" \
+   SOURCE_FILE="$TMP/cap-source.txt" \
+   STABLE_FILE="$TMP/cap-stable.txt" \
+   PREVIOUS_FILE="$TMP/empty-v1.txt" \
+   OUTPUT_FILE="$TMP/capped-v1.txt" \
+   LEGACY_OUTPUT_FILE="$TMP/capped-legacy.txt" \
+   MAX_MIRRORS=1 \
+   STABLE_SLOTS=1 \
+   bash "$BUILDER" >/dev/null 2>&1 &&
+   [[ "$(grep -c '^https://' "$TMP/capped-v1.txt")" -eq 1 ]] &&
+   [[ "$(cat "$TMP/capped-legacy.txt")" == 'https://github.com' ]]
+then
+  pass 'v1 cap is enforced and legacy remains DIRECT-only'
+else
+  fail 'v1 cap is enforced and legacy remains DIRECT-only'
 fi
 
 printf '========================================\n'
