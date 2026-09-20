@@ -1,37 +1,13 @@
-<!--
-HERO_IMAGE
-建议后续插入横向项目主视觉或 Logo，宽度 720–900 px。
-位置固定在标题上方，不改变下面的文档结构。
--->
-
-<div align="center">
-
 # ghlane
 
 **Linux 上的 GitHub Release 透明加速器**
 
-继续使用 `curl` 和 `wget`。符合安全条件的 Release 下载会测速可用线路，选择本机更快的路径，并用 GitHub 提供的 SHA-256 和文件大小校验结果。
-
 [![CI](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml/badge.svg)](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml)
 [![Version](https://img.shields.io/badge/version-0.2.1-0969da)](https://github.com/Takabunbin/ghlane)
-[![Shell](https://img.shields.io/badge/shell-Bash-4EAA25?logo=gnubash&logoColor=white)](https://github.com/Takabunbin/ghlane)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](https://github.com/Takabunbin/ghlane)
 [![License](https://img.shields.io/github/license/Takabunbin/ghlane)](LICENSE)
 
-[快速开始](#快速开始) · [工作方式](#工作方式) · [安全边界](#安全边界) · [支持范围](#支持范围) · [命令](#命令) · [配置](#配置)
-
-</div>
-
-<!--
-TERMINAL_DEMO
-后续可在这里加入一张 900px 左右的终端 GIF。
-内容建议：普通 curl 命令 -> ghlane 选路 -> 下载完成 -> SHA-256 校验通过。
-下面的文本示例保留，GIF 只负责展示。
--->
-
-## 运行效果
-
-你输入原来的下载命令：
+继续使用原来的 `curl` 和 `wget`。ghlane 在本机比较 GitHub DIRECT 与可用镜像，选择当前更快的线路，并用 GitHub Release 提供的 SHA-256 和文件大小检查最终文件。
 
 ```console
 $ curl -fL \
@@ -42,33 +18,23 @@ $ curl -fL \
 100 42.6M  100 42.6M    0     0  13.6M      0  0:00:03  0:00:03 --:--:-- 13.6M
 ```
 
-这段输出来自一次真实链路验收。网络、镜像状态和 GitHub 可达性会改变速度，ghlane 会在你的机器上重新测速。
+上面的速度来自一次真实链路验收。实际速度取决于本机网络、GitHub 可达性和镜像状态，ghlane 会在你的机器上重新测速。
 
-| 行为 | ghlane 的处理 |
-| --- | --- |
-| 命令习惯 | 保留 `curl` / `wget` |
-| 选路 | 本机同时测试 DIRECT 和候选镜像 |
-| 文件完整性 | 对照 GitHub Release 的 SHA-256 和文件大小 |
-| 镜像出错 | 丢弃临时文件，改走 GitHub DIRECT |
-| 后台占用 | 客户端不安装守护进程或定时任务 |
-
-## 快速开始
-
-### 安装
+## 安装
 
 ```bash
 curl -fsSL https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/install.sh | bash
 ```
 
-安装器会把当前 `main` 解析成具体 commit，再从这个 commit 下载安装文件。非 root 用户需要系统提供 `sudo`。
+安装器会先把当前 `main` 解析成具体 commit，再从这个 commit 下载安装文件。非 root 用户需要系统提供 `sudo`。
 
-检查状态：
+安装后检查：
 
 ```bash
 ghlane status
 ```
 
-正常输出类似：
+输出类似：
 
 ```text
 ghlane 0.2.1
@@ -80,7 +46,7 @@ registry cache: fresh
 cached route: gh-proxy.com
 ```
 
-### 下载
+## 使用
 
 `curl`：
 
@@ -94,7 +60,7 @@ curl -fL   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -o FILE
 wget   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -O FILE
 ```
 
-ghlane 只接管符合安全条件的 GitHub Release 下载。其他命令交给系统 `curl` 或 `wget` 执行。
+不需要记镜像前缀，也不需要换一套下载命令。ghlane 只接管符合安全条件的 GitHub Release 下载，其他调用交给系统 `curl` 或 `wget`。
 
 ## 工作方式
 
@@ -115,9 +81,9 @@ flowchart TD
     W -- "不一致" --> E["返回下载错误"]
 ```
 
-客户端会缓存一次选路结果，默认有效 1 小时。远程 registry 默认缓存 24 小时。冷启动时，候选线路使用同一测速窗口，DIRECT 也参加比较。
+客户端默认缓存一次选路结果 1 小时，远程 registry 默认缓存 24 小时。冷启动时，DIRECT 和候选镜像进入同一测速流程。
 
-### 镜像列表更新流程
+### Registry 更新
 
 ```mermaid
 flowchart LR
@@ -128,7 +94,7 @@ flowchart LR
     P --> L["客户端本地测速"]
 ```
 
-发现任务只提供候选。中央任务会下载固定 GitHub Release 样本并比对内容，随后生成带版本头的 `registry-v1`。客户端仍会对每个实际下载文件执行完整校验。
+发现任务只收集候选。中央任务用固定 GitHub Release 样本检查协议和内容，再生成带版本头的 `registry-v1`。客户端仍会校验每个实际下载文件。
 
 当前协议：
 
@@ -137,13 +103,15 @@ flowchart LR
 https://mirror.example
 ```
 
-客户端最多接受配置上限内的 HTTPS 镜像条目。registry 无法刷新时，ghlane 会保留可用缓存，或回退到安装时的镜像列表与 DIRECT。
+registry 无法刷新时，ghlane 会继续使用可用缓存；没有可用缓存时，会回退到安装时的镜像列表和 DIRECT。
 
 ## 安全边界
 
-公共镜像只承担传输工作。ghlane 使用 GitHub Releases API 返回的资产 `digest` 和 `size` 作为完整性依据。
+**ghlane 不信任镜像返回的文件内容。**
 
-一次加速下载需要满足这些条件：
+镜像只负责传输。文件能否交给调用者，由 GitHub Releases API 返回的资产 `digest` 和 `size` 决定。
+
+一次加速下载需要同时满足：
 
 1. URL 指向公开的 `github.com/.../releases/download/...` 文件。
 2. `curl` 或 `wget` 参数属于 ghlane 已审查的安全集合。
@@ -151,9 +119,9 @@ https://mirror.example
 4. GitHub Releases API 返回该文件的 SHA-256 和文件大小。
 5. 下载结果与 GitHub 元数据一致。
 
-ghlane 先把数据写入目标目录中的临时文件。校验通过后，它用无覆盖提交把临时文件交给调用者。镜像返回错误内容、超大响应或下载错误时，ghlane 会删除临时结果并尝试 DIRECT。
+ghlane 先把数据写入目标目录中的临时文件。校验通过后再提交为目标文件。镜像返回错误内容、超大响应或下载错误时，临时文件会被丢弃，并尝试 GitHub DIRECT。
 
-这些情况会直接绕过镜像：
+这些情况直接绕过镜像：
 
 | 情况 | 处理 |
 | --- | --- |
@@ -166,11 +134,11 @@ ghlane 先把数据写入目标目录中的临时文件。校验通过后，它�
 | GitHub 没有提供可验证的 Release digest | DIRECT |
 | Python 3 或 SHA-256 工具不可用 | DIRECT |
 
-完整说明见 [安全模型](SECURITY.md)。
+更完整的说明见 [SECURITY.md](SECURITY.md)。
 
 ## 支持范围
 
-ghlane 当前处理这一类 URL：
+ghlane 当前处理：
 
 ```text
 https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
@@ -186,7 +154,7 @@ https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
 - 带 query 或 fragment 的 Release URL
 - ghlane 无法确认语义安全的 curl / wget 调用
 
-ghlane 把这些请求交还给系统工具，不改写 URL。
+ghlane 对这些请求不改写 URL。
 
 ### 已验证系统
 
@@ -199,23 +167,15 @@ CI 会在以下系统执行安装、重装、卸载和回归测试：
 | Ubuntu 24.04 | 通过 |
 | Ubuntu 26.04 | 通过 |
 
-运行加速路径需要 Bash、curl、Python 3 和 `sha256sum`。使用 wget 加速时还需要 wget。
+加速路径需要 Bash、curl、Python 3 和 `sha256sum`。使用 wget 加速时还需要 wget。
 
 ## 命令
-
-```text
-ghlane status
-ghlane mirrors
-ghlane refresh
-ghlane self-test
-ghlane version
-```
 
 | 命令 | 用途 |
 | --- | --- |
 | `ghlane status` | 查看后端、registry 状态和缓存线路 |
 | `ghlane mirrors` | 查看 DIRECT 与当前候选镜像 |
-| `ghlane refresh` | 触发 `registry-v1` 刷新并清除旧选路缓存 |
+| `ghlane refresh` | 刷新 `registry-v1` 并清除选路缓存 |
 | `ghlane self-test` | 检查核心规则和本地安全前提 |
 | `ghlane version` | 输出当前版本 |
 
@@ -249,15 +209,15 @@ GHLANE_BYPASS=1 curl -fL URL -o FILE
 | `REGISTRY_MAX` | `8` | 客户端接受的镜像数量上限 |
 | `REGISTRY_TIMEOUT` | `5` | registry 请求超时秒数 |
 
-把 `REGISTRY_URL` 设为空字符串可以关闭远程 registry：
+关闭远程 registry：
 
 ```bash
 REGISTRY_URL=''
 ```
 
-ghlane 会继续使用本地 fallback 和 DIRECT。
+关闭后仍可使用本地 fallback 和 DIRECT。
 
-重新安装会保留已有配置，并迁移旧版官方 registry URL。安装器不会覆盖你自己放在 `/usr/local/bin/curl` 或 `/usr/local/bin/wget` 的文件。
+重新安装会保留已有配置，并迁移旧版官方 registry URL。安装器不会覆盖用户已有的 `/usr/local/bin/curl` 或 `/usr/local/bin/wget`。
 
 <details>
 <summary>安装后的文件</summary>
@@ -271,7 +231,7 @@ ghlane 会继续使用本地 fallback 和 DIRECT。
 /etc/ghlane/mirrors.txt
 ```
 
-`curl` 和 `wget` 只在对应的 `/usr/local/bin` 路径可安全接管时创建指向 ghlane 的符号链接。系统后端保留在原位置。
+`/usr/local/bin/curl` 和 `/usr/local/bin/wget` 只在对应路径可安全接管时创建为指向 ghlane 的符号链接。系统后端保留在原位置。
 
 </details>
 
@@ -281,7 +241,7 @@ ghlane 会继续使用本地 fallback 和 DIRECT。
 curl -fsSL https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/uninstall.sh | bash
 ```
 
-卸载器只删除 ghlane 创建的 wrapper、核心文件和配置。它不会删除系统 `curl` 或 `wget`。
+卸载器只删除 ghlane 创建的 wrapper、核心文件和配置，不删除系统 `curl` 或 `wget`。
 
 ## 开发与测试
 
@@ -295,7 +255,7 @@ shellcheck ghlane install.sh uninstall.sh scripts/build-registry.sh
 ./ghlane self-test
 ```
 
-查看测试目录可以运行更完整的回归用例：
+完整回归测试：
 
 ```bash
 bash tests/fault-injection.sh
@@ -306,9 +266,7 @@ python3 tests/discovery.py
 
 ## 设计取舍
 
-ghlane 把兼容性让给 DIRECT。它只加速自己能验证语义和文件完整性的请求。
-
-这个选择会让一部分 `curl` / `wget` 写法失去加速，但系统工具仍会收到原始命令。新增参数先走 DIRECT，项目审查清楚语义后再加入安全集合。
+ghlane 只加速自己能验证命令语义和文件完整性的请求。无法确认时，原始命令交给 DIRECT。
 
 客户端不运行 daemon 或 cron。registry 维护由仓库的 GitHub Actions 执行，用户机器只在需要下载时工作。
 
