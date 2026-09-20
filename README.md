@@ -3,7 +3,7 @@
 **给中国大陆 Linux 主机 / VPS 加速 GitHub Release 下载**
 
 [![CI](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml/badge.svg)](https://github.com/Takabunbin/ghlane/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-0.2.1-0969da)](https://github.com/Takabunbin/ghlane)
+[![Version](https://img.shields.io/badge/version-0.2.2-0969da)](https://github.com/Takabunbin/ghlane)
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](https://github.com/Takabunbin/ghlane)
 [![License](https://img.shields.io/github/license/Takabunbin/ghlane)](LICENSE)
 
@@ -39,7 +39,7 @@ ghlane status
 ```
 
 ```text
-ghlane 0.2.1
+ghlane 0.2.2
 curl: /usr/bin/curl
 wget: /usr/bin/wget
 mirrors fallback: /etc/ghlane/mirrors.txt
