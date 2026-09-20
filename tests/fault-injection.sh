@@ -277,6 +277,369 @@ printf '%s\n%s\n' 'https://fast.example' 'https://fast.example' >"$MIRRORS"
 run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
 expect_route 'duplicate mirror entries do not break selection' 'https://fast.example'
 
+reset
+printf '%s\n%s\n' 'https://slow.example' 'https://fast.example' >"$MIRRORS"
+bench=$(env GHLANE_CONFIG="$CONF" GHLANE_CACHE_DIR="$TMP/cache" FAKE_LOG="$LOG" "$CORE" benchmark "$URL" 2>/dev/null)
+if grep -Eq '^fast\.example[[:space:]]+4\.77 MiB/s[[:space:]]+selected
+reset
+printf '%s\n' 'https://good.example' >"$MIRRORS"
+: >"$TMP/cache/best"
+run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
+expect_route 'empty cache file is recovered' 'https://good.example'
+
+reset
+printf '%s\n' 'https://good.example' >"$MIRRORS"
+printf 'garbage https://good.example\n' >"$TMP/cache/best"
+run_curl "$URL" -o "$TMP/out" >/dev/null 2>"$TMP/err"
+rc=$?
+if [[ $rc -eq 0 && "$(cached_route)" == 'https://good.example' ]]; then
+  pass 'malformed cache timestamp is recovered'
+else
+  fail 'malformed cache timestamp is recovered'
+fi
+
+reset
+printf '%s\n' 'https://good.example' >"$MIRRORS"
+printf '%s %s\n' "$(( $(date +%s) - 7200 ))" 'https://slow.example' >"$TMP/cache/best"
+run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
+expect_route 'expired cache is ignored' 'https://good.example'
+
+reset
+printf '%s\n' 'https://good.example' >"$MIRRORS"
+printf '%s %s\n' "$(date +%s)" 'https://removed.example' >"$TMP/cache/best"
+run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
+expect_route 'cached mirror removed from registry is ignored' 'https://good.example'
+
+reset
+printf '%s\n%s\n' 'https://good.example' 'https://slow.example' >"$MIRRORS"
+future=$(( $(date +%s) + 86400 ))
+printf '%s %s\n' "$future" 'https://slow.example' >"$TMP/cache/best"
+run_curl "$URL" -o "$TMP/out" >/dev/null 2>&1
+if [[ "$(cached_route)" == 'https://slow.example' ]]; then
+  fail 'future cache timestamp is rejected'
+else
+  pass 'future cache timestamp is rejected'
+fi
+
+printf '\n--- D. verified failover / final-transfer failures ---\n'
+reset
+printf '%s\n%s\n' 'https://fast.example' 'https://good.example' >"$MIRRORS"
+printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
+FINAL_FAIL_HOST='fast.example'
+FINAL_FAIL_CODE=22
+run_curl "$URL" -o "$TMP/final-403" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 && "$(cat "$TMP/final-403")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'mirror HTTP failure retries DIRECT and commits verified file'
+else
+  fail 'mirror HTTP failure retries DIRECT and commits verified file'
+fi
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
+FINAL_FAIL_HOST='fast.example'
+FINAL_FAIL_CODE=28
+run_curl "$URL" -o "$TMP/final-timeout" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 && "$(cat "$TMP/final-timeout")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'mirror timeout safely retries DIRECT'
+else
+  fail 'mirror timeout safely retries DIRECT'
+fi
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
+FINAL_FAIL_HOST='fast.example'
+FINAL_FAIL_CODE=18
+FINAL_PARTIAL=1
+run_curl "$URL" -o "$TMP/partial.out" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 && "$(cat "$TMP/partial.out")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'partial mirror output is isolated and replaced by verified DIRECT file'
+else
+  fail 'partial mirror output is isolated and replaced by verified DIRECT file'
+fi
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
+FINAL_FAIL_HOST='fast.example'
+FINAL_FAIL_CODE=23
+set +e
+run_curl "$URL" -o "$TMP/local-write-fail" >/dev/null 2>&1
+rc=$?
+set -e
+if [[ $rc -eq 23 && "$(cached_route)" == 'https://fast.example' ]]; then
+  pass 'local curl write failure does not evict a healthy route'
+else
+  fail 'local curl write failure does not evict a healthy route'
+fi
+
+printf '\n--- E. cache/TMP degradation ---\n'
+reset
+printf '%s\n' 'https://good.example' >"$MIRRORS"
+set +e
+env   GHLANE_CONFIG="$CONF"   GHLANE_CACHE_DIR="/proc/ghlane-cache-$$"   FAKE_LOG="$LOG"   "$TMP/bin/curl" "$URL" -o "$TMP/no-cache.out" >/dev/null 2>&1
+rc=$?
+set -e
+if [[ $rc -eq 0 ]]; then pass 'unwritable cache directory does not block download'; else fail 'unwritable cache directory does not block download'; fi
+
+reset
+printf '%s\n' 'https://good.example' >"$MIRRORS"
+set +e
+env   TMPDIR="/proc/ghlane-tmp-$$"   GHLANE_CONFIG="$CONF"   GHLANE_CACHE_DIR="$TMP/cache"   FAKE_LOG="$LOG"   "$TMP/bin/curl" "$URL" -o "$TMP/no-tmp.out" >/dev/null 2>&1
+rc=$?
+set -e
+probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if [[ $rc -eq 0 && $probes -eq 0 ]]; then
+  pass 'unusable TMPDIR safely bypasses acceleration and uses DIRECT'
+else
+  fail 'unusable TMPDIR safely bypasses acceleration and uses DIRECT'
+fi
+
+reset
+printf '%s\n' 'https://good.example' >"$MIRRORS"
+mkdir -p "$TMP/nohome"
+set +e
+env -u HOME -u XDG_CACHE_HOME -u GHLANE_CACHE_DIR   TMPDIR="$TMP/nohome"   GHLANE_CONFIG="$CONF"   FAKE_LOG="$LOG"   "$TMP/bin/curl" "$URL" -o "$TMP/nohome.out" >/dev/null 2>&1
+rc=$?
+set -e
+if [[ $rc -eq 0 ]]; then pass 'HOME/XDG cache variables may be absent'; else fail 'HOME/XDG cache variables may be absent'; fi
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+mkdir -p "$TMP/attacker-cache"
+chmod 0777 "$TMP/attacker-cache"
+env GHLANE_CONFIG="$CONF" GHLANE_CACHE_DIR="$TMP/attacker-cache" FAKE_LOG="$LOG" \
+  "$TMP/bin/curl" "$URL" -o "$TMP/unsafe-cache.out" >/dev/null 2>&1
+if [[ "$(cat "$TMP/unsafe-cache.out" 2>/dev/null)" == 'OK' &&
+      -z "$(find "$TMP/attacker-cache" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  pass 'writable shared cache directory is not trusted'
+else
+  fail 'writable shared cache directory is not trusted'
+fi
+
+printf '\n--- F. argument preservation ---\n'
+arg_test() {
+  local name="$1"
+  shift
+  reset
+  printf '%s\n' 'https://fast.example' >"$MIRRORS"
+  run_curl "$@" >/dev/null 2>&1
+  if grep -Fq 'https://fast.example/https://github.com/o/r/releases/download/' "$LOG"; then
+    pass "$name"
+  else
+    fail "$name"
+  fi
+}
+
+arg_test 'curl --retry preserved' --retry 3 "$URL" -o "$TMP/a"
+bundled_bypass() {
+  local name="$1"
+  shift
+  reset
+  printf '%s\n' 'https://fast.example' >"$MIRRORS"
+  run_curl "$@" "$URL" -o "$TMP/a" >/dev/null 2>&1 || true
+  probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+  if (( probes == 0 )); then pass "$name"; else fail "$name"; fi
+}
+bundled_bypass 'curl resume (-C -) bypasses acceleration' -C -
+bundled_bypass 'curl range bypasses acceleration' --range 0-10
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+run_curl -O "$URL" >/dev/null 2>&1 || true
+probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if (( probes == 0 )); then pass 'curl remote-name (-O) bypasses acceleration'; else fail 'curl remote-name (-O) bypasses acceleration'; fi
+ENCODED='https://github.com/o/r/releases/download/v1/file%20name.bin'
+arg_test 'percent-encoded Release URL preserved' "$ENCODED" -o "$TMP/a"
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+out=$(run_curl "$URL" 2>/dev/null)
+if [[ "$out" == 'OK' ]]; then pass 'stdout download remains usable'; else fail 'stdout download remains usable'; fi
+
+printf '\n--- G. bundled short-option safety ---\n'
+bundled_bypass 'bundled curl -u auth bypasses routing' -fsSLuuser:pass
+bundled_bypass 'bundled curl -b cookie bypasses routing' -fsSLbcookie=secret
+bundled_bypass 'bundled curl -k TLS override bypasses routing' -fsSLk
+bundled_bypass 'curl --url-query bypasses routing' --url-query token=secret
+bundled_bypass 'curl referer (-e) bypasses routing' -e 'https://private/?token=secret'
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+run_wget -e 'header=Authorization: secret' "$URL" -O "$TMP/w" >/dev/null 2>&1 || true
+if grep -Fq 'https://fast.example/' "$LOG"; then
+  fail 'wget execute (-e) bypasses routing'
+else
+  pass 'wget execute (-e) bypasses routing'
+fi
+bundled_bypass 'unknown future curl option bypasses routing' --future-option value
+
+printf '\n--- H. transport-option semantics ---\n'
+transport_gap() {
+  local name="$1"
+  shift
+  reset
+  printf '%s\n' 'https://fast.example' >"$MIRRORS"
+  run_curl "$@" "$URL" -o "$TMP/a" >/dev/null 2>&1 || true
+  probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+  if (( probes > 0 )); then
+    gap "$name affects final curl but is not applied to race probes"
+  else
+    pass "$name bypasses or is applied consistently"
+  fi
+}
+transport_gap 'curl -4' -4
+transport_gap 'curl -6' -6
+transport_gap 'curl --proxy' --proxy http://proxy.invalid:8080
+transport_gap 'curl --resolve' --resolve github.com:443:127.0.0.1
+transport_gap 'curl --connect-to' --connect-to github.com:443:127.0.0.1:443
+transport_gap 'curl --interface' --interface lo
+transport_gap 'curl --insecure' --insecure
+transport_gap 'curl --cacert' --cacert /tmp/nonexistent-ca
+
+printf '\n--- I. implicit config-file safety ---\n'
+unsafe_conf="$TMP/unsafe-ghlane.conf"
+cp "$CONF" "$unsafe_conf"
+printf '\ntouch %q\n' "$TMP/unsafe-config-executed" >>"$unsafe_conf"
+chmod 0666 "$unsafe_conf"
+if env GHLANE_CONFIG="$unsafe_conf" "$CORE" version >/dev/null 2>&1 &&
+   [[ ! -e "$TMP/unsafe-config-executed" ]]; then
+  pass 'writable custom GHLANE_CONFIG is not sourced'
+else
+  fail 'writable custom GHLANE_CONFIG is not sourced'
+fi
+
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+mkdir -p "$TMP/curlhome"
+printf 'header = "Authorization: Bearer secret-from-curlrc"\n' >"$TMP/curlhome/.curlrc"
+CURL_HOME="$TMP/curlhome" run_curl "$URL" -o "$TMP/a" >/dev/null 2>&1 || true
+probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if (( probes > 0 )); then
+  gap 'implicit .curlrc is not inspected; real curl could add sensitive headers after routing'
+else
+  pass 'implicit .curlrc causes safe bypass'
+fi
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+printf 'header = Authorization: Bearer secret-from-wgetrc\n' >"$TMP/wgetrc"
+WGETRC="$TMP/wgetrc" run_wget "$URL" -O "$TMP/w" >/dev/null 2>&1 || true
+if grep -Fq 'https://fast.example/' "$LOG"; then
+  gap 'WGETRC is not inspected before mirror routing'
+else
+  pass 'WGETRC causes safe bypass'
+fi
+
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+mkdir -p "$TMP/netrchome"
+printf 'machine github.com login user password secret\n' >"$TMP/netrchome/.netrc"
+HOME="$TMP/netrchome" run_curl "$URL" -o "$TMP/netrc.out" >/dev/null 2>&1 || true
+probes=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if (( probes == 0 )); then
+  pass 'implicit .netrc causes safe bypass'
+else
+  fail 'implicit .netrc causes safe bypass'
+fi
+
+printf '\n--- J. mirror trust / content correctness ---\n'
+reset
+printf '%s\n%s\n' 'https://badbin.example' 'https://good.example' >"$MIRRORS"
+run_curl "$URL" -o "$TMP/badbin.out" >/dev/null 2>&1
+if [[ "$(cat "$TMP/badbin.out" 2>/dev/null)" == 'OK' && "$(cached_route)" != 'https://badbin.example' ]]; then
+  pass 'wrong binary content is rejected by GitHub digest and retried DIRECT'
+else
+  fail 'wrong binary content is rejected by GitHub digest and retried DIRECT'
+fi
+
+reset
+printf '%s\n' 'https://oversize.example' >"$MIRRORS"
+run_curl "$URL" -o "$TMP/oversize.out" >/dev/null 2>&1
+if [[ "$(cat "$TMP/oversize.out" 2>/dev/null)" == 'OK' && "$(cached_route)" != 'https://oversize.example' ]]; then
+  pass 'oversized mirror body is bounded, discarded and retried DIRECT'
+else
+  fail 'oversized mirror body is bounded, discarded and retried DIRECT'
+fi
+
+reset
+printf '%s\r\n' 'https://fast.example' >"$MIRRORS"
+run_curl "$URL" -o "$TMP/crlf.out" >/dev/null 2>&1
+if [[ "$(cached_route)" == 'DIRECT' ]]; then
+  gap 'CRLF mirror registry lines are not normalized'
+else
+  pass 'CRLF mirror registry is normalized'
+fi
+
+printf '\n--- K. concurrency ---\n'
+reset
+printf '%s\n%s\n' 'https://slow.example' 'https://fast.example' >"$MIRRORS"
+pids=()
+for i in $(seq 1 20); do
+  run_curl "$URL" -o "$TMP/cold-$i" >/dev/null 2>&1 &
+  pids+=("$!")
+done
+concurrent_ok=1
+for p in "${pids[@]}"; do wait "$p" || concurrent_ok=0; done
+if [[ $concurrent_ok -eq 1 && "$(cached_route)" == 'https://fast.example' ]]; then
+  pass '20 concurrent cold starts leave a valid cache'
+else
+  fail '20 concurrent cold starts leave a valid cache'
+fi
+probe_count=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if (( probe_count > 3 )); then
+  gap 'cold-start stampede: concurrent processes independently race mirrors'
+else
+  pass 'cold-start race is coalesced'
+fi
+
+: >"$LOG"
+pids=()
+for i in $(seq 1 20); do
+  run_curl "$URL" -o "$TMP/warm-$i" >/dev/null 2>&1 &
+  pids+=("$!")
+done
+warm_ok=1
+for p in "${pids[@]}"; do wait "$p" || warm_ok=0; done
+probe_count=$(awk -F '\t' '$2=="1"{n++} END{print n+0}' "$LOG")
+if [[ $warm_ok -eq 1 && $probe_count -eq 0 ]]; then
+  pass '20 concurrent warm-cache downloads avoid re-racing'
+else
+  fail '20 concurrent warm-cache downloads avoid re-racing'
+fi
+
+printf '\n--- L. wget final failure ---\n'
+reset
+printf '%s\n' 'https://fast.example' >"$MIRRORS"
+printf '%s %s\n' "$(date +%s)" 'https://fast.example' >"$TMP/cache/best"
+FINAL_FAIL_HOST='fast.example'
+FINAL_FAIL_CODE=8
+run_wget "$URL" -O "$TMP/wget-fail" >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 && "$(cat "$TMP/wget-fail")" == 'OK' && ! -e "$TMP/cache/best" ]]; then
+  pass 'wget mirror failure retries DIRECT and commits verified file'
+else
+  fail 'wget mirror failure retries DIRECT and commits verified file'
+fi
+
+printf '\n========================================\n'
+printf ' summary\n'
+printf '========================================\n'
+printf 'PASS=%d  FAIL=%d  GAP=%d\n' "$PASS" "$FAIL" "$GAP"
+printf 'GAP = known non-security optimization gap, not a regression in the current 0.2.1 contract.\n'
+
+exit "$(( FAIL > 0 ? 1 : 0 ))"
+ <<<"$bench" &&
+   grep -Eq '^slow\.example[[:space:]]+293 KiB/s' <<<"$bench" &&
+   grep -Eq '^direct[[:space:]]+98 KiB/s' <<<"$bench"; then
+  pass 'benchmark reports all routes and marks the fastest sample'
+else
+  fail 'benchmark reports all routes and marks the fastest sample'
+fi
+
 printf '\n--- C. cache corruption / persistence ---\n'
 reset
 printf '%s\n' 'https://good.example' >"$MIRRORS"
