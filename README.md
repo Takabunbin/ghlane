@@ -7,11 +7,11 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](https://github.com/Takabunbin/ghlane)
 [![License](https://img.shields.io/github/license/Takabunbin/ghlane)](LICENSE)
 
-如果你的 Linux 服务器用 `curl` 或 `wget` 下载 GitHub Release 经常很慢、卡住或超时，安装 ghlane 一次即可。之后继续使用原来的 GitHub URL 和原来的下载命令。
+如果你的 Linux 服务器用 `curl` 或 `wget` 下载 GitHub Release 经常很慢、卡住或超时，安装 ghlane 一次即可。之后继续使用原来的 GitHub URL 和下载命令。
 
-ghlane 会在**当前这台机器**上测试 GitHub DIRECT 和可用镜像，选择本轮更快的线路。下载完成后，它再用 GitHub Releases API 提供的 SHA-256 和文件大小校验文件。
+ghlane 会在**当前这台机器**上比较 GitHub DIRECT 和可用镜像，选择本轮更快的线路。文件下载完成后，再用 GitHub Releases API 提供的 SHA-256 和文件大小做完整性校验。
 
-**适合：** 中国大陆 Linux VPS、云服务器、软路由或其他经常从 GitHub Releases 拉取二进制文件的 Linux 主机。
+**适合：** 中国大陆 Linux VPS、云服务器，以及其他经常从 GitHub Releases 下载二进制文件的 Linux 服务器。
 
 **当前不处理：** `git clone`、GitHub API、Raw 文件、archive/codeload、私有 Release。
 
@@ -23,19 +23,21 @@ ghlane 会在**当前这台机器**上测试 GitHub DIRECT 和可用镜像，选
 curl -fsSL https://cdn.jsdelivr.net/gh/Takabunbin/ghlane@main/install.sh | bash
 ```
 
-安装后继续用原来的命令：
+安装器不会替换系统的 `/usr/bin/curl` 或 `/usr/bin/wget`。在 `/usr/local/bin` 可安全接管时，它会创建指向 ghlane 的 wrapper；不符合加速条件的命令仍由系统 `curl` / `wget` 原样执行。
+
+安装后继续使用原来的命令：
 
 ```bash
-curl -fL   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -o FILE
+curl -fL https://github.com/OWNER/REPO/releases/download/TAG/FILE -o FILE
 ```
 
 或者：
 
 ```bash
-wget   https://github.com/OWNER/REPO/releases/download/TAG/FILE   -O FILE
+wget https://github.com/OWNER/REPO/releases/download/TAG/FILE -O FILE
 ```
 
-你不需要把 GitHub URL 手工改成某个镜像前缀。
+不需要手工给 GitHub URL 加镜像前缀。
 
 查看当前状态：
 
@@ -65,9 +67,15 @@ flowchart TD
 
 ghlane 从人工种子和公开社区来源收集候选镜像。GitHub Actions 会先检查候选是否能正确返回 GitHub Release 样本，再生成版本化的 `registry-v1`。
 
-中央检查只决定哪些节点可以进入候选池。客户端仍会在本机比较 DIRECT 和当前候选。
+中央检查只决定哪些节点可以进入候选池。最终使用哪条线路，仍由客户端在本机比较 DIRECT 和当前候选后决定。
 
-查看候选：
+仓库中的相关文件：
+
+- [`registry-v1.txt`](registry-v1.txt)：当前生产 registry
+- [`mirrors.txt`](mirrors.txt)：人工维护的基础镜像集
+- [`sources.json`](sources.json)：自动发现候选镜像时使用的来源
+
+安装后查看当前候选：
 
 ```bash
 ghlane mirrors
