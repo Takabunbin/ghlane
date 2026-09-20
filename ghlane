@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-VERSION="0.2.1"
+VERSION="0.2.2"
 CONFIG="${GHLANE_CONFIG:-/etc/ghlane.conf}"
 
 if [[ -r "$CONFIG" ]]; then
