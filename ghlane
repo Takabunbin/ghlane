@@ -383,7 +383,7 @@ save_candidate() {
 }
 
 race_candidates() {
-  local url="$1" tmpdir candidate target stats speed content_type http_code size_download rc i=0 best
+  local url="$1" report_file="${2:-}" tmpdir candidate target stats speed content_type http_code size_download rc i=0 best
   tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane.XXXXXX") || return 1
 
   # ponytail: each candidate gets the same 2s budget. A max-time timeout is
@@ -418,10 +418,849 @@ race_candidates() {
   done < <(printf 'DIRECT\n'; mirror_source)
   wait
 
+  if [[ -n "$report_file" ]]; then
+    cat "$tmpdir"/* 2>/dev/null >"$report_file" || true
+  fi
+
   best=$(cat "$tmpdir"/* 2>/dev/null | awk -F '\t' '$1+0 > best+0 {best=$1; line=$2} END {if (line) print line}')
   rm -rf "$tmpdir"
   [[ -n "$best" ]] || return 1
   printf '%s\n' "$best"
+}
+
+format_speed() {
+  awk -v bytes="$1" 'BEGIN {
+    if (bytes <= 0) { print "unavailable"; exit }
+    if (bytes >= 1048576) { printf "%.2f MiB/s", bytes / 1048576; exit }
+    if (bytes >= 1024) { printf "%.0f KiB/s", bytes / 1024; exit }
+    printf "%.0f B/s", bytes
+  }'
+}
+
+benchmark_routes() {
+  local url="$1" report best speed candidate label mark
+  is_accelerable_url "$url" || { log 'benchmark requires a public GitHub Release asset URL'; return 2; }
+  [[ "$url" != *\?* && "$url" != *\#* ]] || { log 'benchmark URL must not contain query or fragment'; return 2; }
+
+  maybe_refresh_registry
+  report=$(mktemp "${TMPDIR:-/tmp}/ghlane-benchmark.XXXXXX") || return 1
+  best=$(race_candidates "$url" "$report") || {
+    rm -f "$report"
+    log 'no usable route found'
+    return 1
+  }
+
+  printf '%-28s %14s %s\n' 'ROUTE' 'SPEED' 'RESULT'
+  while IFS=
+
+select_candidate() {
+  local url="$1" candidate lock_fd
+  candidate=$(cached_candidate 2>/dev/null) && { printf '%s\n' "$candidate"; return; }
+
+  if command -v flock >/dev/null 2>&1 && mkdir -p "$CACHE_DIR" 2>/dev/null; then
+    exec {lock_fd}>"$CACHE_DIR/race.lock"
+    if flock -w 10 "$lock_fd"; then
+      if candidate=$(cached_candidate 2>/dev/null); then
+        flock -u "$lock_fd"
+        exec {lock_fd}>&-
+        printf '%s\n' "$candidate"
+        return
+      fi
+      maybe_refresh_registry
+      candidate=$(race_candidates "$url") || candidate="DIRECT"
+      save_candidate "$candidate"
+      flock -u "$lock_fd"
+      exec {lock_fd}>&-
+      log "selected $(candidate_label "$candidate")"
+      printf '%s\n' "$candidate"
+      return
+    fi
+    exec {lock_fd}>&-
+  fi
+
+  # ponytail: flock is an optional optimization. If unavailable or contended
+  # beyond the bounded wait, correctness does not depend on it.
+  maybe_refresh_registry
+  candidate=$(race_candidates "$url") || candidate="DIRECT"
+  save_candidate "$candidate"
+  log "selected $(candidate_label "$candidate")"
+  printf '%s\n' "$candidate"
+}
+
+explicit_output_path() {
+  local tool="$1" arg out="" count=0 i=0 next=0
+  shift
+  local args=("$@")
+
+  while (( i < ${#args[@]} )); do
+    arg="${args[$i]}"
+    if (( next )); then
+      out="$arg"
+      count=$((count + 1))
+      next=0
+      i=$((i + 1))
+      continue
+    fi
+
+    case "$tool:$arg" in
+      curl:-o|curl:--output|wget:-O|wget:--output-document)
+        next=1
+        ;;
+      curl:--output=*|wget:--output-document=*)
+        out="${arg#*=}"
+        count=$((count + 1))
+        ;;
+      curl:-*)
+        if [[ "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
+          out="${BASH_REMATCH[2]}"
+          count=$((count + 1))
+        fi
+        ;;
+      wget:-*)
+        if [[ "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
+          out="${BASH_REMATCH[2]}"
+          count=$((count + 1))
+        fi
+        ;;
+    esac
+    i=$((i + 1))
+  done
+
+  (( next == 0 && count == 1 )) || return 1
+  [[ -n "$out" && "$out" != '-' ]] || return 1
+  [[ ! -e "$out" && ! -L "$out" ]] || return 1
+  printf '%s\n' "$out"
+}
+
+expected_release_digest() {
+  local url="$1" api meta parsed tmp
+  command -v python3 >/dev/null 2>&1 || return 1
+  command -v sha256sum >/dev/null 2>&1 || return 1
+
+  parsed=$(python3 - "$url" <<'PY' 2>/dev/null
+import sys
+from urllib.parse import quote, unquote, urlsplit
+
+u = urlsplit(sys.argv[1])
+parts = u.path.split('/')
+if u.scheme != 'https' or u.netloc != 'github.com' or len(parts) != 7:
+    raise SystemExit(1)
+if parts[3:5] != ['releases', 'download']:
+    raise SystemExit(1)
+owner, repo = unquote(parts[1]), unquote(parts[2])
+tag, asset = unquote(parts[5]), unquote(parts[6])
+if not owner or not repo or not tag or not asset:
+    raise SystemExit(1)
+api = f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/releases/tags/{quote(tag, safe='')}"
+print(api)
+print(asset)
+PY
+  ) || return 1
+
+  api=${parsed%%$'\n'*}
+  meta=${parsed#*$'\n'}
+  [[ -n "$api" && -n "$meta" && "$api" != "$parsed" ]] || return 1
+
+  tmp=$(mktemp "${TMPDIR:-/tmp}/ghlane-meta.XXXXXX") || return 1
+  if ! "$REAL_CURL" -q -fsSL \
+    --connect-timeout 3 \
+    --max-time 8 \
+    --max-filesize 1048576 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$api" -o "$tmp" 2>/dev/null
+  then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  parsed=$(python3 - "$tmp" "$meta" <<'PY' 2>/dev/null
+import json, re, sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    data = json.load(f)
+name = sys.argv[2]
+for asset in data.get('assets', []):
+    if asset.get('name') != name:
+        continue
+    digest = asset.get('digest')
+    size = asset.get('size')
+    if isinstance(digest, str) and re.fullmatch(r'sha256:[0-9a-fA-F]{64}', digest) and isinstance(size, int) and size >= 0:
+        print(digest.split(':', 1)[1].lower(), size)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+  )
+  rm -f "$tmp"
+
+  [[ "$parsed" =~ ^[0-9a-f]{64}[[:space:]]+[0-9]+$ ]] || return 1
+  printf '%s\n' "$parsed"
+}
+
+
+refresh_release_digest() {
+  expected_release_digest "$1"
+}
+
+file_matches_digest() {
+  local file="$1" digest="$2" size="$3" actual_size actual_digest
+  [[ -f "$file" ]] || return 1
+  actual_size=$(wc -c <"$file") || return 1
+  [[ "$actual_size" == "$size" ]] || return 1
+  actual_digest=$(sha256sum "$file" | awk '{print $1}') || return 1
+  [[ "$actual_digest" == "$digest" ]]
+}
+
+run_candidate_to_file() {
+  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" max_size="$6" target arg i blocks
+  shift 6
+  local args=("$@")
+  target=$(candidate_url "$candidate" "$url")
+
+  for i in "${!args[@]}"; do
+    arg="${args[$i]}"
+    if [[ "$arg" == "$url" ]]; then
+      args[$i]="$target"
+    elif [[ "$arg" == "--url=$url" ]]; then
+      args[$i]="--url=$target"
+    elif [[ "$tool" == curl && ( "$arg" == -o || "$arg" == --output ) ]]; then
+      (( i + 1 < ${#args[@]} )) && args[$((i + 1))]="$out"
+    elif [[ "$tool" == wget && ( "$arg" == -O || "$arg" == --output-document ) ]]; then
+      (( i + 1 < ${#args[@]} )) && args[$((i + 1))]="$out"
+    elif [[ "$tool" == curl && "$arg" == --output=* ]]; then
+      args[$i]="--output=$out"
+    elif [[ "$tool" == wget && "$arg" == --output-document=* ]]; then
+      args[$i]="--output-document=$out"
+    elif [[ "$tool" == curl && "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
+      args[$i]="${BASH_REMATCH[1]}$out"
+    elif [[ "$tool" == wget && "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
+      args[$i]="${BASH_REMATCH[1]}$out"
+    fi
+  done
+
+  if [[ "$candidate" == DIRECT ]]; then
+    "$real" "${args[@]}"
+    return $?
+  fi
+
+  blocks=$(( (max_size + 1023) / 1024 ))
+  (( blocks >= 64 )) || blocks=64
+  (
+    # Bound untrusted mirror output to roughly the GitHub-declared asset size.
+    # Linux/Bash file-size limits use KiB units. Keep a small 64 KiB floor so
+    # helper/runtime writes are not starved for tiny assets; digest+exact-size
+    # validation still rejects every extra byte before commit.
+    ulimit -f "$blocks" 2>/dev/null || exit 125
+    "$real" "${args[@]}"
+  )
+}
+
+commit_verified_file() {
+  local tmp="$1" out="$2"
+  # tmp is created beside out, so a hard link is same-filesystem and provides
+  # an atomic no-clobber create. This closes the precheck -> final-commit race.
+  ln -- "$tmp" "$out" 2>/dev/null || return 1
+  rm -f -- "$tmp"
+}
+
+verified_transfer() {
+  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" digest="$6" size="$7"
+  shift 7
+  local dir base tmp mode status fresh
+
+  dir=$(dirname -- "$out")
+  base=$(basename -- "$out")
+  tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
+  mode=$(printf '%03o' "$(( 0666 & ~$(umask) ))")
+  chmod "$mode" "$tmp" 2>/dev/null || true
+
+  run_candidate_to_file "$tool" "$real" "$url" "$candidate" "$tmp" "$size" "$@"
+  status=$?
+  if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
+    if commit_verified_file "$tmp" "$out"; then
+      return 0
+    fi
+    rm -f "$tmp"
+    [[ "$tool" == curl ]] && return 23 || return 3
+  fi
+
+  # Local write/argument failures are not route failures. Do not evict a good
+  # mirror or retry the same local failure against GitHub.
+  if (( status != 0 )) && ! is_route_failure "$tool" "$status"; then
+    rm -f "$tmp"
+    return "$status"
+  fi
+  rm -f "$tmp"
+
+  if [[ "$candidate" != DIRECT ]]; then
+    rm -f "$CACHE_DIR/best" "$CACHE_DIR/registry.stamp" 2>/dev/null || true
+    log 'mirror transfer failed verification; retrying direct'
+    tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
+    chmod "$mode" "$tmp" 2>/dev/null || true
+    run_candidate_to_file "$tool" "$real" "$url" DIRECT "$tmp" "$size" "$@"
+    status=$?
+    if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
+      if commit_verified_file "$tmp" "$out"; then
+        return 0
+      fi
+      rm -f "$tmp"
+      [[ "$tool" == curl ]] && return 23 || return 3
+    fi
+    if (( status != 0 )); then
+      rm -f "$tmp"
+      return "$status"
+    fi
+  elif (( status != 0 )); then
+    rm -f "$tmp"
+    return "$status"
+  fi
+
+  # GitHub allows release assets to be replaced under the same URL. If a
+  # successful direct download disagrees with cached metadata, refresh once
+  # and validate the already-downloaded direct file again before failing closed.
+  if [[ -f "$tmp" ]] && fresh=$(refresh_release_digest "$url" 2>/dev/null); then
+    read -r digest size <<<"$fresh"
+    if file_matches_digest "$tmp" "$digest" "$size"; then
+      if commit_verified_file "$tmp" "$out"; then
+        return 0
+      fi
+      rm -f "$tmp"
+      [[ "$tool" == curl ]] && return 23 || return 3
+    fi
+  fi
+
+  rm -f "$tmp"
+  log 'download failed GitHub digest verification'
+  [[ "$tool" == curl ]] && return 18 || return 4
+}
+
+is_route_failure() {
+  local tool="$1" status="$2"
+  case "$tool:$status" in
+    curl:5|curl:6|curl:7|curl:16|curl:18|curl:22|curl:28|curl:35|curl:47|curl:52|curl:55|curl:56|curl:60|curl:92|\
+    wget:4|wget:5|wget:8|curl:125|curl:153|wget:125|wget:153) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+
+proxy_tool() {
+  local tool="$1" real="$2" url candidate out digest_info digest size
+  shift 2
+
+  [[ "${GHLANE_BYPASS:-0}" == 1 ]] && exec "$real" "$@"
+  [[ -x "$real" ]] || { log "$tool backend not found: $real"; return 127; }
+  has_implicit_config "$tool" && exec "$real" "$@"
+  args_are_safe "$tool" "$@" || exec "$real" "$@"
+  url=$(find_single_url "$@") || exec "$real" "$@"
+  out=$(explicit_output_path "$tool" "$@") || exec "$real" "$@"
+  digest_info=$(expected_release_digest "$url") || exec "$real" "$@"
+  read -r digest size <<<"$digest_info"
+  candidate=$(select_candidate "$url")
+  verified_transfer "$tool" "$real" "$url" "$candidate" "$out" "$digest" "$size" "$@"
+}
+
+self_test() {
+  local u='https://github.com/o/r/releases/download/v1/app' testdir
+  is_accelerable_url "$u" || return 1
+  ! is_accelerable_url 'https://api.github.com/repos/o/r' || return 1
+  ! is_accelerable_url 'https://raw.githubusercontent.com/o/r/main/install.sh' || return 1
+  [[ "$(candidate_url 'https://mirror.example' "$u")" == "https://mirror.example/$u" ]] || return 1
+  [[ "$(find_single_url "--url=$u")" == "$u" ]] || return 1
+  ! find_single_url "$u" 'https://example.com/other' >/dev/null 2>&1 || return 1
+  args_are_safe curl '-fsSL' '-o' '/tmp/out' "$u" || return 1
+  args_are_safe wget '-q' '-O' '/tmp/out' "$u" || return 1
+  ! args_are_safe curl '-H' 'Cookie: session=secret' "$u" || return 1
+  ! args_are_safe curl '--url-query' 'token=secret' "$u" || return 1
+  ! args_are_safe curl '-e' 'https://private/?token=secret' "$u" || return 1
+  ! args_are_safe wget '-e' 'header=Authorization: secret' "$u" || return 1
+  ! args_are_safe wget '--referer=https://private/?token=secret' "$u" || return 1
+  ! args_are_safe curl '--future-option' "$u" || return 1
+  [[ "$(bounded_uint 0 1 30 2)" == 2 ]] || return 1
+  [[ "$(bounded_uint 08 1 30 2)" == 8 ]] || return 1
+  [[ "$(bounded_uint 999 1 30 2)" == 2 ]] || return 1
+  [[ "$(bounded_uint nope 1 30 2)" == 2 ]] || return 1
+
+  testdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane-selftest.XXXXXX") || return 1
+  printf '# comment only\n' >"$testdir/curl-empty"
+  printf '%s\n' '-H = "Authorization: Bearer secret"' >"$testdir/curl-active"
+  printf '%s\n' 'passive_ftp = on' >"$testdir/wget-stock"
+  printf '%s\n' 'HTTP-Password = secret' >"$testdir/wget-active"
+  system_config_requires_bypass curl "$testdir/curl-empty" && { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass curl "$testdir/curl-active" || { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass wget "$testdir/wget-stock" && { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass wget "$testdir/wget-active" || { rm -rf "$testdir"; return 1; }
+
+  printf 'verified' >"$testdir/src"
+  printf 'existing' >"$testdir/dst"
+  commit_verified_file "$testdir/src" "$testdir/dst" && { rm -rf "$testdir"; return 1; }
+  [[ "$(cat "$testdir/dst")" == existing && "$(cat "$testdir/src")" == verified ]] || { rm -rf "$testdir"; return 1; }
+  rm -f "$testdir/dst"
+  commit_verified_file "$testdir/src" "$testdir/dst" || { rm -rf "$testdir"; return 1; }
+  [[ "$(cat "$testdir/dst")" == verified && ! -e "$testdir/src" ]] || { rm -rf "$testdir"; return 1; }
+
+  rm -rf "$testdir"
+
+  log 'self-test passed'
+}
+
+cli() {
+  local candidate
+  case "${1:-}" in
+    --version|-V|version) printf 'ghlane %s\n' "$VERSION" ;;
+    self-test) self_test ;;
+    mirrors) printf 'DIRECT\n'; mirror_source ;;
+    benchmark)
+      [[ -n "${2:-}" ]] || { printf 'Usage: ghlane benchmark <github-release-url>\n' >&2; return 2; }
+      benchmark_routes "$2"
+      ;;
+    refresh)
+      if refresh_registry; then
+        rm -f "$CACHE_DIR/best" 2>/dev/null || true
+        printf 'registry refreshed\n'
+      else
+        log 'registry refresh failed; existing mirrors kept'
+        return 1
+      fi
+      ;;
+    status)
+      printf 'ghlane %s\n' "$VERSION"
+      printf 'curl: %s\n' "$REAL_CURL"
+      printf 'wget: %s\n' "$REAL_WGET"
+      printf 'mirrors fallback: %s\n' "$MIRROR_FILE"
+      printf 'registry: %s\n' "${REGISTRY_URL:-disabled}"
+      if registry_is_fresh 2>/dev/null; then
+        printf 'registry cache: fresh\n'
+      elif registry_file_valid "$CACHE_DIR/registry" 2>/dev/null; then
+        printf 'registry cache: stale\n'
+      else
+        printf 'registry cache: none\n'
+      fi
+      if candidate=$(cached_candidate 2>/dev/null); then
+        printf 'cached route: %s\n' "$(candidate_label "$candidate")"
+      else
+        printf 'cached route: none\n'
+      fi
+      ;;
+    *)
+      printf 'Usage: ghlane {status|mirrors|benchmark|refresh|self-test|version}\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+case "$(basename "$0")" in
+  curl) proxy_tool curl "$REAL_CURL" "$@" ;;
+  wget) proxy_tool wget "$REAL_WGET" "$@" ;;
+  *) cli "$@" ;;
+esac
+\t' read -r speed candidate; do
+    [[ -n "$candidate" ]] || continue
+    label=$(candidate_label "$candidate")
+    mark=''
+    [[ "$candidate" == "$best" ]] && mark='selected'
+    printf '%-28s %14s %s\n' "$label" "$(format_speed "$speed")" "$mark"
+  done < <(sort -t 
+
+select_candidate() {
+  local url="$1" candidate lock_fd
+  candidate=$(cached_candidate 2>/dev/null) && { printf '%s\n' "$candidate"; return; }
+
+  if command -v flock >/dev/null 2>&1 && mkdir -p "$CACHE_DIR" 2>/dev/null; then
+    exec {lock_fd}>"$CACHE_DIR/race.lock"
+    if flock -w 10 "$lock_fd"; then
+      if candidate=$(cached_candidate 2>/dev/null); then
+        flock -u "$lock_fd"
+        exec {lock_fd}>&-
+        printf '%s\n' "$candidate"
+        return
+      fi
+      maybe_refresh_registry
+      candidate=$(race_candidates "$url") || candidate="DIRECT"
+      save_candidate "$candidate"
+      flock -u "$lock_fd"
+      exec {lock_fd}>&-
+      log "selected $(candidate_label "$candidate")"
+      printf '%s\n' "$candidate"
+      return
+    fi
+    exec {lock_fd}>&-
+  fi
+
+  # ponytail: flock is an optional optimization. If unavailable or contended
+  # beyond the bounded wait, correctness does not depend on it.
+  maybe_refresh_registry
+  candidate=$(race_candidates "$url") || candidate="DIRECT"
+  save_candidate "$candidate"
+  log "selected $(candidate_label "$candidate")"
+  printf '%s\n' "$candidate"
+}
+
+explicit_output_path() {
+  local tool="$1" arg out="" count=0 i=0 next=0
+  shift
+  local args=("$@")
+
+  while (( i < ${#args[@]} )); do
+    arg="${args[$i]}"
+    if (( next )); then
+      out="$arg"
+      count=$((count + 1))
+      next=0
+      i=$((i + 1))
+      continue
+    fi
+
+    case "$tool:$arg" in
+      curl:-o|curl:--output|wget:-O|wget:--output-document)
+        next=1
+        ;;
+      curl:--output=*|wget:--output-document=*)
+        out="${arg#*=}"
+        count=$((count + 1))
+        ;;
+      curl:-*)
+        if [[ "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
+          out="${BASH_REMATCH[2]}"
+          count=$((count + 1))
+        fi
+        ;;
+      wget:-*)
+        if [[ "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
+          out="${BASH_REMATCH[2]}"
+          count=$((count + 1))
+        fi
+        ;;
+    esac
+    i=$((i + 1))
+  done
+
+  (( next == 0 && count == 1 )) || return 1
+  [[ -n "$out" && "$out" != '-' ]] || return 1
+  [[ ! -e "$out" && ! -L "$out" ]] || return 1
+  printf '%s\n' "$out"
+}
+
+expected_release_digest() {
+  local url="$1" api meta parsed tmp
+  command -v python3 >/dev/null 2>&1 || return 1
+  command -v sha256sum >/dev/null 2>&1 || return 1
+
+  parsed=$(python3 - "$url" <<'PY' 2>/dev/null
+import sys
+from urllib.parse import quote, unquote, urlsplit
+
+u = urlsplit(sys.argv[1])
+parts = u.path.split('/')
+if u.scheme != 'https' or u.netloc != 'github.com' or len(parts) != 7:
+    raise SystemExit(1)
+if parts[3:5] != ['releases', 'download']:
+    raise SystemExit(1)
+owner, repo = unquote(parts[1]), unquote(parts[2])
+tag, asset = unquote(parts[5]), unquote(parts[6])
+if not owner or not repo or not tag or not asset:
+    raise SystemExit(1)
+api = f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/releases/tags/{quote(tag, safe='')}"
+print(api)
+print(asset)
+PY
+  ) || return 1
+
+  api=${parsed%%$'\n'*}
+  meta=${parsed#*$'\n'}
+  [[ -n "$api" && -n "$meta" && "$api" != "$parsed" ]] || return 1
+
+  tmp=$(mktemp "${TMPDIR:-/tmp}/ghlane-meta.XXXXXX") || return 1
+  if ! "$REAL_CURL" -q -fsSL \
+    --connect-timeout 3 \
+    --max-time 8 \
+    --max-filesize 1048576 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$api" -o "$tmp" 2>/dev/null
+  then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  parsed=$(python3 - "$tmp" "$meta" <<'PY' 2>/dev/null
+import json, re, sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    data = json.load(f)
+name = sys.argv[2]
+for asset in data.get('assets', []):
+    if asset.get('name') != name:
+        continue
+    digest = asset.get('digest')
+    size = asset.get('size')
+    if isinstance(digest, str) and re.fullmatch(r'sha256:[0-9a-fA-F]{64}', digest) and isinstance(size, int) and size >= 0:
+        print(digest.split(':', 1)[1].lower(), size)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+  )
+  rm -f "$tmp"
+
+  [[ "$parsed" =~ ^[0-9a-f]{64}[[:space:]]+[0-9]+$ ]] || return 1
+  printf '%s\n' "$parsed"
+}
+
+
+refresh_release_digest() {
+  expected_release_digest "$1"
+}
+
+file_matches_digest() {
+  local file="$1" digest="$2" size="$3" actual_size actual_digest
+  [[ -f "$file" ]] || return 1
+  actual_size=$(wc -c <"$file") || return 1
+  [[ "$actual_size" == "$size" ]] || return 1
+  actual_digest=$(sha256sum "$file" | awk '{print $1}') || return 1
+  [[ "$actual_digest" == "$digest" ]]
+}
+
+run_candidate_to_file() {
+  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" max_size="$6" target arg i blocks
+  shift 6
+  local args=("$@")
+  target=$(candidate_url "$candidate" "$url")
+
+  for i in "${!args[@]}"; do
+    arg="${args[$i]}"
+    if [[ "$arg" == "$url" ]]; then
+      args[$i]="$target"
+    elif [[ "$arg" == "--url=$url" ]]; then
+      args[$i]="--url=$target"
+    elif [[ "$tool" == curl && ( "$arg" == -o || "$arg" == --output ) ]]; then
+      (( i + 1 < ${#args[@]} )) && args[$((i + 1))]="$out"
+    elif [[ "$tool" == wget && ( "$arg" == -O || "$arg" == --output-document ) ]]; then
+      (( i + 1 < ${#args[@]} )) && args[$((i + 1))]="$out"
+    elif [[ "$tool" == curl && "$arg" == --output=* ]]; then
+      args[$i]="--output=$out"
+    elif [[ "$tool" == wget && "$arg" == --output-document=* ]]; then
+      args[$i]="--output-document=$out"
+    elif [[ "$tool" == curl && "$arg" != --* && "$arg" =~ ^(-[^-]*o)(.+)$ ]]; then
+      args[$i]="${BASH_REMATCH[1]}$out"
+    elif [[ "$tool" == wget && "$arg" != --* && "$arg" =~ ^(-[^-]*O)(.+)$ ]]; then
+      args[$i]="${BASH_REMATCH[1]}$out"
+    fi
+  done
+
+  if [[ "$candidate" == DIRECT ]]; then
+    "$real" "${args[@]}"
+    return $?
+  fi
+
+  blocks=$(( (max_size + 1023) / 1024 ))
+  (( blocks >= 64 )) || blocks=64
+  (
+    # Bound untrusted mirror output to roughly the GitHub-declared asset size.
+    # Linux/Bash file-size limits use KiB units. Keep a small 64 KiB floor so
+    # helper/runtime writes are not starved for tiny assets; digest+exact-size
+    # validation still rejects every extra byte before commit.
+    ulimit -f "$blocks" 2>/dev/null || exit 125
+    "$real" "${args[@]}"
+  )
+}
+
+commit_verified_file() {
+  local tmp="$1" out="$2"
+  # tmp is created beside out, so a hard link is same-filesystem and provides
+  # an atomic no-clobber create. This closes the precheck -> final-commit race.
+  ln -- "$tmp" "$out" 2>/dev/null || return 1
+  rm -f -- "$tmp"
+}
+
+verified_transfer() {
+  local tool="$1" real="$2" url="$3" candidate="$4" out="$5" digest="$6" size="$7"
+  shift 7
+  local dir base tmp mode status fresh
+
+  dir=$(dirname -- "$out")
+  base=$(basename -- "$out")
+  tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
+  mode=$(printf '%03o' "$(( 0666 & ~$(umask) ))")
+  chmod "$mode" "$tmp" 2>/dev/null || true
+
+  run_candidate_to_file "$tool" "$real" "$url" "$candidate" "$tmp" "$size" "$@"
+  status=$?
+  if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
+    if commit_verified_file "$tmp" "$out"; then
+      return 0
+    fi
+    rm -f "$tmp"
+    [[ "$tool" == curl ]] && return 23 || return 3
+  fi
+
+  # Local write/argument failures are not route failures. Do not evict a good
+  # mirror or retry the same local failure against GitHub.
+  if (( status != 0 )) && ! is_route_failure "$tool" "$status"; then
+    rm -f "$tmp"
+    return "$status"
+  fi
+  rm -f "$tmp"
+
+  if [[ "$candidate" != DIRECT ]]; then
+    rm -f "$CACHE_DIR/best" "$CACHE_DIR/registry.stamp" 2>/dev/null || true
+    log 'mirror transfer failed verification; retrying direct'
+    tmp=$(mktemp "$dir/.${base}.ghlane.XXXXXX") || exec "$real" "$@"
+    chmod "$mode" "$tmp" 2>/dev/null || true
+    run_candidate_to_file "$tool" "$real" "$url" DIRECT "$tmp" "$size" "$@"
+    status=$?
+    if (( status == 0 )) && file_matches_digest "$tmp" "$digest" "$size"; then
+      if commit_verified_file "$tmp" "$out"; then
+        return 0
+      fi
+      rm -f "$tmp"
+      [[ "$tool" == curl ]] && return 23 || return 3
+    fi
+    if (( status != 0 )); then
+      rm -f "$tmp"
+      return "$status"
+    fi
+  elif (( status != 0 )); then
+    rm -f "$tmp"
+    return "$status"
+  fi
+
+  # GitHub allows release assets to be replaced under the same URL. If a
+  # successful direct download disagrees with cached metadata, refresh once
+  # and validate the already-downloaded direct file again before failing closed.
+  if [[ -f "$tmp" ]] && fresh=$(refresh_release_digest "$url" 2>/dev/null); then
+    read -r digest size <<<"$fresh"
+    if file_matches_digest "$tmp" "$digest" "$size"; then
+      if commit_verified_file "$tmp" "$out"; then
+        return 0
+      fi
+      rm -f "$tmp"
+      [[ "$tool" == curl ]] && return 23 || return 3
+    fi
+  fi
+
+  rm -f "$tmp"
+  log 'download failed GitHub digest verification'
+  [[ "$tool" == curl ]] && return 18 || return 4
+}
+
+is_route_failure() {
+  local tool="$1" status="$2"
+  case "$tool:$status" in
+    curl:5|curl:6|curl:7|curl:16|curl:18|curl:22|curl:28|curl:35|curl:47|curl:52|curl:55|curl:56|curl:60|curl:92|\
+    wget:4|wget:5|wget:8|curl:125|curl:153|wget:125|wget:153) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+
+proxy_tool() {
+  local tool="$1" real="$2" url candidate out digest_info digest size
+  shift 2
+
+  [[ "${GHLANE_BYPASS:-0}" == 1 ]] && exec "$real" "$@"
+  [[ -x "$real" ]] || { log "$tool backend not found: $real"; return 127; }
+  has_implicit_config "$tool" && exec "$real" "$@"
+  args_are_safe "$tool" "$@" || exec "$real" "$@"
+  url=$(find_single_url "$@") || exec "$real" "$@"
+  out=$(explicit_output_path "$tool" "$@") || exec "$real" "$@"
+  digest_info=$(expected_release_digest "$url") || exec "$real" "$@"
+  read -r digest size <<<"$digest_info"
+  candidate=$(select_candidate "$url")
+  verified_transfer "$tool" "$real" "$url" "$candidate" "$out" "$digest" "$size" "$@"
+}
+
+self_test() {
+  local u='https://github.com/o/r/releases/download/v1/app' testdir
+  is_accelerable_url "$u" || return 1
+  ! is_accelerable_url 'https://api.github.com/repos/o/r' || return 1
+  ! is_accelerable_url 'https://raw.githubusercontent.com/o/r/main/install.sh' || return 1
+  [[ "$(candidate_url 'https://mirror.example' "$u")" == "https://mirror.example/$u" ]] || return 1
+  [[ "$(find_single_url "--url=$u")" == "$u" ]] || return 1
+  ! find_single_url "$u" 'https://example.com/other' >/dev/null 2>&1 || return 1
+  args_are_safe curl '-fsSL' '-o' '/tmp/out' "$u" || return 1
+  args_are_safe wget '-q' '-O' '/tmp/out' "$u" || return 1
+  ! args_are_safe curl '-H' 'Cookie: session=secret' "$u" || return 1
+  ! args_are_safe curl '--url-query' 'token=secret' "$u" || return 1
+  ! args_are_safe curl '-e' 'https://private/?token=secret' "$u" || return 1
+  ! args_are_safe wget '-e' 'header=Authorization: secret' "$u" || return 1
+  ! args_are_safe wget '--referer=https://private/?token=secret' "$u" || return 1
+  ! args_are_safe curl '--future-option' "$u" || return 1
+  [[ "$(bounded_uint 0 1 30 2)" == 2 ]] || return 1
+  [[ "$(bounded_uint 08 1 30 2)" == 8 ]] || return 1
+  [[ "$(bounded_uint 999 1 30 2)" == 2 ]] || return 1
+  [[ "$(bounded_uint nope 1 30 2)" == 2 ]] || return 1
+
+  testdir=$(mktemp -d "${TMPDIR:-/tmp}/ghlane-selftest.XXXXXX") || return 1
+  printf '# comment only\n' >"$testdir/curl-empty"
+  printf '%s\n' '-H = "Authorization: Bearer secret"' >"$testdir/curl-active"
+  printf '%s\n' 'passive_ftp = on' >"$testdir/wget-stock"
+  printf '%s\n' 'HTTP-Password = secret' >"$testdir/wget-active"
+  system_config_requires_bypass curl "$testdir/curl-empty" && { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass curl "$testdir/curl-active" || { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass wget "$testdir/wget-stock" && { rm -rf "$testdir"; return 1; }
+  system_config_requires_bypass wget "$testdir/wget-active" || { rm -rf "$testdir"; return 1; }
+
+  printf 'verified' >"$testdir/src"
+  printf 'existing' >"$testdir/dst"
+  commit_verified_file "$testdir/src" "$testdir/dst" && { rm -rf "$testdir"; return 1; }
+  [[ "$(cat "$testdir/dst")" == existing && "$(cat "$testdir/src")" == verified ]] || { rm -rf "$testdir"; return 1; }
+  rm -f "$testdir/dst"
+  commit_verified_file "$testdir/src" "$testdir/dst" || { rm -rf "$testdir"; return 1; }
+  [[ "$(cat "$testdir/dst")" == verified && ! -e "$testdir/src" ]] || { rm -rf "$testdir"; return 1; }
+
+  rm -rf "$testdir"
+
+  log 'self-test passed'
+}
+
+cli() {
+  local candidate
+  case "${1:-}" in
+    --version|-V|version) printf 'ghlane %s\n' "$VERSION" ;;
+    self-test) self_test ;;
+    mirrors) printf 'DIRECT\n'; mirror_source ;;
+    refresh)
+      if refresh_registry; then
+        rm -f "$CACHE_DIR/best" 2>/dev/null || true
+        printf 'registry refreshed\n'
+      else
+        log 'registry refresh failed; existing mirrors kept'
+        return 1
+      fi
+      ;;
+    status)
+      printf 'ghlane %s\n' "$VERSION"
+      printf 'curl: %s\n' "$REAL_CURL"
+      printf 'wget: %s\n' "$REAL_WGET"
+      printf 'mirrors fallback: %s\n' "$MIRROR_FILE"
+      printf 'registry: %s\n' "${REGISTRY_URL:-disabled}"
+      if registry_is_fresh 2>/dev/null; then
+        printf 'registry cache: fresh\n'
+      elif registry_file_valid "$CACHE_DIR/registry" 2>/dev/null; then
+        printf 'registry cache: stale\n'
+      else
+        printf 'registry cache: none\n'
+      fi
+      if candidate=$(cached_candidate 2>/dev/null); then
+        printf 'cached route: %s\n' "$(candidate_label "$candidate")"
+      else
+        printf 'cached route: none\n'
+      fi
+      ;;
+    *)
+      printf 'Usage: ghlane {status|mirrors|refresh|self-test|version}\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+case "$(basename "$0")" in
+  curl) proxy_tool curl "$REAL_CURL" "$@" ;;
+  wget) proxy_tool wget "$REAL_WGET" "$@" ;;
+  *) cli "$@" ;;
+esac
+\t' -k1,1nr "$report")
+  rm -f "$report"
 }
 
 select_candidate() {
